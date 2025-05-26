@@ -83,7 +83,7 @@ def log_message(message: str, level: str = "INFO", gui_only: bool = False) -> No
         gui_logger.info(message)
 
 def check_authentication() -> bool:
-    """Check if both Spotify and Tidal authentication are valid."""
+    """Check if Tidal authentication is valid."""
     try:
         # Check if settings file exists
         if not os.path.exists("app_settings.json"):
@@ -94,34 +94,9 @@ def check_authentication() -> bool:
         with open("app_settings.json", "r") as f:
             settings = json.load(f)
             
-        # Check Spotify credentials
-        if not settings.get("spotify_config", {}).get("client_id") or \
-           not settings.get("spotify_config", {}).get("client_secret"):
-            log_message("Spotify credentials not found in settings", "DEBUG")
-            return False
-            
-        # Check Spotify token cache
-        if not os.path.exists(".spotify_token_cache"):
-            log_message("Spotify token cache not found", "DEBUG")
-            return False
-            
         # Check Tidal session
         if not os.path.exists("tidal_session.pkl"):
             log_message("Tidal session file not found", "DEBUG")
-            return False
-            
-        # Verify Spotify token
-        try:
-            sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-                client_id=settings["spotify_config"]["client_id"],
-                client_secret=settings["spotify_config"]["client_secret"],
-                redirect_uri="http://localhost:8888/callback",
-                cache_path=".spotify_token_cache"
-            ))
-            sp.current_user()
-            log_message("Spotify token verified", "DEBUG")
-        except Exception as e:
-            log_message(f"Spotify token verification failed: {str(e)}", "DEBUG")
             return False
             
         # Verify Tidal session
@@ -136,7 +111,7 @@ def check_authentication() -> bool:
             log_message(f"Tidal session verification failed: {str(e)}", "DEBUG")
             return False
             
-        log_message("All authentication checks passed", "DEBUG")
+        log_message("Authentication check passed", "DEBUG")
         return True
         
     except Exception as e:
@@ -2233,8 +2208,8 @@ def main():
         auth_window.show()
         app.exec_()
         
-        # Check again after auth window closes
-        if not check_authentication():
+        # Only check Tidal session after auth window closes
+        if not os.path.exists("tidal_session.pkl"):
             sys.exit(1)
     
     # Launch main application
