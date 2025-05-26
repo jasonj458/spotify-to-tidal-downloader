@@ -41,11 +41,15 @@ pip install -r requirements.txt
    - Log in to your Tidal account
    - The application will handle the authentication process
 
-5. Build the application:
+5. Build the application using the provided build script:
 ```bash
-pyinstaller --onefile --windowed --icon=logo.ico SpotifyToTidal.py
+python build.py
 ```
-   The executable will be created in the `dist` directory.
+   This script will:
+   - Check for all required files
+   - Install necessary dependencies
+   - Create the executable in the `dist` directory
+   - Generate a README.txt with usage instructions
 
 ## Usage
 
@@ -60,16 +64,40 @@ pyinstaller --onefile --windowed --icon=logo.ico SpotifyToTidal.py
 
 Note: The application must be built before it can be run. Running the Python script directly is not supported.
 
+## Important Notes
+
+1. **Building Requirements**:
+   - Always use `build.py` to create the executable
+   - The build script ensures all dependencies are properly included
+   - Running the executable on other PCs requires the same build process
+
+2. **System Requirements**:
+   - Windows 10 or later
+   - WSL (Windows Subsystem for Linux) installed and configured
+   - FFmpeg installed and available in system PATH
+   - Internet connection for Spotify and Tidal authentication
+
+3. **First Run**:
+   - The application will create necessary directories in your AppData folder
+   - You'll need to authenticate with both Spotify and Tidal
+   - You'll need to provide your WSL sudo password for file operations
+
+4. **Troubleshooting**:
+   - If the application crashes on other PCs, ensure all system requirements are met
+   - Verify WSL is properly installed and configured
+   - Check that FFmpeg is installed and accessible in the system PATH
+   - Ensure all authentication files are properly created in the AppData folder
+
 ## Configuration
 
 The application uses a configuration file (`app_settings.json`) to store settings. This file is created automatically on first run and can be modified to change default settings.
 
 ## Building from Source
 
-To create an executable:
+To create an executable, use the provided build script:
 
 ```bash
-pyinstaller --onefile --windowed --icon=logo.ico SpotifyToTidal.py
+python build.py
 ```
 
 The executable will be created in the `dist` directory. This is the recommended way to run the application.
