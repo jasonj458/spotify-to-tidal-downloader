@@ -1,22 +1,22 @@
-# Spotify to Tidal Transfer & Downloader
+# Spotify to Tidal Transfer Tool
 
-A modern desktop application that allows you to transfer your playlists, albums, and tracks from Spotify to Tidal, with the ability to download the content directly to your computer.
+A Python application that allows users to transfer playlists from Spotify to Tidal, with the ability to download and convert songs to MP3 format.
 
 ## Features
 
-- 🎵 Transfer playlists, albums, and tracks from Spotify to Tidal
-- 💾 Download content directly to your computer
-- 🎧 Convert downloaded files to MP3 format
-- 🌓 Light and dark mode support
-- 🔒 Secure password handling
-- 🎨 Modern and intuitive user interface
+- Transfer playlists from Spotify to Tidal
+- Download songs from Tidal
+- Convert downloaded songs to MP3 format
+- Modern GUI interface
+- Authentication management for both Spotify and Tidal
+- Progress tracking and error handling
 
-## Requirements
+## Prerequisites
 
-- Windows 10/11 with WSL (Windows Subsystem for Linux) installed
 - Python 3.8 or higher
-- FFmpeg (will be installed automatically if not present)
-- Spotify account
+- FFmpeg installed and available in system PATH
+- WSL (Windows Subsystem for Linux) for file operations
+- Spotify Developer account
 - Tidal account
 
 ## Installation
@@ -27,63 +27,51 @@ git clone https://github.com/yourusername/spotify-to-tidal.git
 cd spotify-to-tidal
 ```
 
-2. Install the required Python packages:
+2. Install the required dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Build the application:
-```bash
-python build.py
-```
+3. Set up your Spotify Developer credentials:
+   - Create a new application at https://developer.spotify.com/dashboard
+   - Add `http://localhost:8888/callback` to the Redirect URIs
+   - Update the credentials in the application settings
 
-The executable will be created in the `dist` directory.
+4. Set up your Tidal credentials:
+   - Log in to your Tidal account
+   - The application will handle the authentication process
 
 ## Usage
 
 1. Run the application:
 ```bash
-.\dist\SpotifyToTidal.exe
+python SpotifyToTidal.py
 ```
 
-2. Log in to your Spotify and Tidal accounts when prompted
-3. Enter a Spotify playlist, album, or track URL
-4. Choose whether to convert files to MP3 format
-5. Select an output folder
-6. Click "Transfer to Tidal" to create a Tidal playlist
-7. Click "Download from Tidal" to download the content
+2. Authenticate with Spotify and Tidal when prompted
+3. Enter the Spotify playlist URL
+4. Select the destination folder for downloads
+5. Wait for the transfer and conversion process to complete
 
 ## Configuration
 
-The application stores its configuration in `app_settings.json`. You can modify settings such as:
-- Download quality
-- Output format
-- File naming patterns
-- UI preferences
+The application uses a configuration file (`app_settings.json`) to store settings. This file is created automatically on first run and can be modified to change default settings.
 
 ## Building from Source
 
-1. Install the required packages:
+To create an executable:
+
 ```bash
-pip install -r requirements.txt
+pyinstaller --onefile --windowed --icon=logo.ico SpotifyToTidal.py
 ```
-
-2. Run the build script:
-```bash
-python build.py
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
-- [tidal-dl-ng](https://github.com/yaronzz/Tidal-Media-Downloader) for the download functionality
-- [spotipy](https://github.com/spotipy-dev/spotipy) for Spotify API integration
-- [tidalapi](https://github.com/tamland/python-tidal) for Tidal API integration
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) for the GUI framework 
+- Uses spotipy for Spotify API integration
+- Uses tidalapi for Tidal API integration
+- Uses PyQt5 for the GUI
+- Uses FFmpeg for audio conversion 

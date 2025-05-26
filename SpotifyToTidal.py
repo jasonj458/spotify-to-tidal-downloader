@@ -34,6 +34,9 @@ from spotipy.oauth2 import SpotifyOAuth
 import tidalapi
 from rapidfuzz import fuzz
 
+# Import the auth setup window
+from auth_setup import AuthSetupWindow
+
 # ------------------- Logging Setup -------------------
 # Create separate loggers for GUI and debug logs
 gui_logger = logging.getLogger('gui')
@@ -78,6 +81,1017 @@ def log_message(message: str, level: str = "INFO", gui_only: bool = False) -> No
         gui_logger.warning(message)
     else:
         gui_logger.info(message)
+
+def check_authentication() -> bool:
+    """Check if both Spotify and Tidal authentication are valid."""
+    try:
+        # Check if settings file exists
+        if not os.path.exists("app_settings.json"):
+            log_message("Settings file not found", "DEBUG")
+            return False
+            
+        # Load settings
+        with open("app_settings.json", "r") as f:
+            settings = json.load(f)
+            
+        # Check Spotify credentials
+        if not settings.get("spotify_config", {}).get("client_id") or \
+           not settings.get("spotify_config", {}).get("client_secret"):
+            log_message("Spotify credentials not found in settings", "DEBUG")
+            return False
+            
+        # Check Spotify token cache
+        if not os.path.exists(".spotify_token_cache"):
+            log_message("Spotify token cache not found", "DEBUG")
+            return False
+            
+        # Check Tidal session
+        if not os.path.exists("tidal_session.pkl"):
+            log_message("Tidal session file not found", "DEBUG")
+            return False
+            
+        # Verify Spotify token
+        try:
+            sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+                client_id=settings["spotify_config"]["client_id"],
+                client_secret=settings["spotify_config"]["client_secret"],
+                redirect_uri="http://localhost:8888/callback",
+                cache_path=".spotify_token_cache"
+            ))
+            sp.current_user()
+            log_message("Spotify token verified", "DEBUG")
+        except Exception as e:
+            log_message(f"Spotify token verification failed: {str(e)}", "DEBUG")
+            return False
+            
+        # Verify Tidal session
+        try:
+            with open("tidal_session.pkl", "rb") as f:
+                session = pickle.load(f)
+            if not session.check_login():
+                log_message("Tidal session invalid", "DEBUG")
+                return False
+            log_message("Tidal session verified", "DEBUG")
+        except Exception as e:
+            log_message(f"Tidal session verification failed: {str(e)}", "DEBUG")
+            return False
+            
+        log_message("All authentication checks passed", "DEBUG")
+        return True
+        
+    except Exception as e:
+        log_message(f"Error checking authentication: {str(e)}", "ERROR")
+        import traceback
+        log_message(f"Traceback: {traceback.format_exc()}", "ERROR")
+        return False
+
+# ------------------- Main Application UI -------------------
+class SpotifyToTidalApp(QWidget):
+    """Main application window."""
+    def __init__(self) -> None:
+        super().__init__()
+        self.setup_application()
+        self.setup_ui()
+        self.apply_theme()
+        
+        # Initialize transfer manager with debug_logger
+        self.manager = TransferManager(debug_logger)
+        
+        # Initialize Spotify client
+        try:
+            spotify_auth = SpotifyAuthManager(self)
+            global sp
+            sp = spotify_auth.get_spotify_client()
+        except Exception as e:
+            QMessageBox.critical(
+                self, 
+                "Spotify Login Error", 
+                f"Failed to log in to Spotify: {str(e)}\nPlease try again."
+            )
+            sys.exit(1)
+            
+        # Verify installations and setup
+        try:
+            if platform.system() == "Windows":
+                # Get sudo password first
+                sudo_pass = get_or_prompt_sudo_password(self)
+                if not sudo_pass:
+                    QMessageBox.critical(
+                        self, 
+                        "Error", 
+                        "Sudo password is required for installation."
+                    )
+                    sys.exit(1)
+
+                if not ensure_tidal_dl_ng_installed(self):
+                    QMessageBox.critical(
+                        self, 
+                        "Installation Error", 
+                        "tidal-dl-ng installation failed. Please ensure WSL is properly installed and configured."
+                    )
+                    sys.exit(1)
+                    
+            if not ensure_ffmpeg_installed(self):
+                QMessageBox.critical(
+                    self,
+                    "FFmpeg Error",
+                    "FFmpeg installation failed. Please install FFmpeg manually."
+                )
+                sys.exit(1)
+                
+            ensure_ffmpeg_path_set(self)
+            
+            # Try to login to Tidal
+            try:
+                self.manager.login_tidal()
+            except Exception as e:
+                QMessageBox.critical(
+                    self, 
+                    "Tidal Login Error", 
+                    f"Failed to log in to Tidal: {str(e)}\nPlease try again."
+                )
+                sys.exit(1)
+                
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Initialization Error",
+                f"Failed to initialize application: {str(e)}"
+            )
+            sys.exit(1)
+            
+        self.playlist_url: Optional[str] = None
+        self.total_tracks: int = 0
+        self.download_thread: Optional[DownloadThread] = None
+
+    def setup_application(self) -> None:
+        """Configure application settings."""
+        self.setWindowTitle("Spotify to Tidal Transfer & Downloader")
+        self.setMinimumSize(1000, 800)
+        self.setWindowIcon(QIcon(_app_settings.get("ui", {}).get("window_icon", "logo.png")))
+
+    def setup_ui(self) -> None:
+        """Set up the user interface."""
+        # Modern font setup
+        modern_font = QFont("Inter", 11)
+        modern_font.setWeight(QFont.Medium)
+        bold_font = QFont("Inter", 14, QFont.Bold)
+        header_font = QFont("Inter", 22, QFont.Bold)
+
+        # Main layout
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Top section with logo and title
+        top_layout = QHBoxLayout()
+        
+        # Logo
+        logo_label = QLabel()
+        logo_pixmap = QPixmap("logo.png")
+        if not logo_pixmap.isNull():
+            logo_pixmap = logo_pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(logo_pixmap)
+        else:
+            logo_label.setText("Logo")
+        top_layout.addWidget(logo_label)
+
+        # Title and subtitle
+        title_layout = QVBoxLayout()
+        title_label = QLabel("Spotify to Tidal Transfer")
+        title_label.setFont(header_font)
+        subtitle_label = QLabel("Transfer your playlists, albums, and tracks from Spotify to Tidal")
+        subtitle_label.setFont(modern_font)
+        subtitle_label.setStyleSheet("color: #666666;")
+        title_layout.addWidget(title_label)
+        title_layout.addWidget(subtitle_label)
+        top_layout.addLayout(title_layout)
+        top_layout.addStretch()
+
+        # MP3 Conversion Toggle as Icon Button
+        self.convert_mp3_toggle = QPushButton()
+        self.convert_mp3_toggle.setCheckable(True)
+        self.convert_mp3_toggle.setChecked(_app_settings.get("convert_to_mp3_only", False))
+        self.convert_mp3_toggle.setFixedSize(48, 48)
+        self.convert_mp3_toggle.setIconSize(QSize(40, 40))
+        self.convert_mp3_toggle.setStyleSheet("""
+            QPushButton {
+                border: 2px solid #d0d0d0;
+                border-radius: 12px;
+                background: #f8f8f8;
+            }
+            QPushButton:checked {
+                border: 2px solid #4a90e2;
+                background: #eaf4ff;
+            }
+        """)
+        self.convert_mp3_toggle.clicked.connect(self.toggle_mp3_conversion)
+        self.set_mp3_icon(self.convert_mp3_toggle.isChecked())
+        top_layout.addWidget(self.convert_mp3_toggle)
+
+        main_layout.addLayout(top_layout)
+
+        # Input card
+        self.input_card = QFrame()
+        self.input_card.setObjectName("inputCard")
+        input_layout = QVBoxLayout(self.input_card)
+        input_layout.setSpacing(15)
+
+        # URL input
+        self.url_input = self.create_input_field("Spotify URL", "Enter Spotify playlist, album, or track URL", input_layout, bold_font, modern_font)[0]
+        self.url_input.textChanged.connect(self.handle_url_input_change)
+
+        # Tidal Playlist Name input (initially hidden)
+        self.tidal_name_input, self.tidal_name_label = self.create_input_field("Tidal Playlist Name", "Enter a name for the new Tidal playlist", input_layout, bold_font, modern_font)
+        self.tidal_name_input.setVisible(False)
+        self.tidal_name_label.setVisible(False)
+        
+        # Output folder input
+        folder_layout = QHBoxLayout()
+        self.download_folder_input, self.download_folder_label = self.create_input_field("Output Folder", "Select download location", folder_layout, bold_font, modern_font)
+        self.download_folder_input.setText(_app_settings.get("download_folder", ""))
+        browse_button = QPushButton("Browse")
+        browse_button.setFont(modern_font)
+        browse_button.clicked.connect(self.browse_and_set_output_folder)
+        folder_layout.addWidget(browse_button)
+        input_layout.addLayout(folder_layout)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.transfer_button = self.create_button("Transfer to Tidal", self.run_transfer, modern_font)
+        self.download_button = self.create_button("Download from Tidal", self.start_download, modern_font)
+        self.download_button.setEnabled(False)
+        
+        # Dark mode toggle
+        self.dark_mode_toggle = QCheckBox("")
+        self.dark_mode_toggle.setStyleSheet(f"""
+            QCheckBox::indicator {{
+                width: 32px;
+                height: 32px;
+            }}
+            QCheckBox::indicator:unchecked {{
+                image: url({_app_settings["ui"]["toggle_unchecked_icon"]});
+            }}
+            QCheckBox::indicator:checked {{
+                image: url({_app_settings["ui"]["toggle_checked_icon"]});
+            }}
+        """)
+        self.dark_mode_toggle.setChecked(_app_settings.get("dark_mode", False))
+        self.dark_mode_toggle.toggled.connect(self.toggle_dark_mode)
+        
+        button_layout.addWidget(self.transfer_button)
+        button_layout.addWidget(self.download_button)
+        button_layout.addWidget(self.dark_mode_toggle)
+        input_layout.addLayout(button_layout)
+        main_layout.addWidget(self.input_card)
+
+        # Progress card
+        self.progress_card = QFrame()
+        self.progress_card.setObjectName("progressCard")
+        progress_layout = QVBoxLayout(self.progress_card)
+        progress_layout.setSpacing(15)
+
+        # Progress bars
+        self.progress_label = QLabel("Transfer Progress")
+        self.progress_label.setFont(bold_font)
+        progress_layout.addWidget(self.progress_label)
+        self.download_progress_bar = self.create_progress_bar("", progress_layout, bold_font)
+        
+        # Conversion progress section
+        conversion_section = QVBoxLayout()
+        self.conversion_label = QLabel("Converting to MP3...")
+        self.conversion_label.setFont(bold_font)
+        self.conversion_label.setVisible(self.convert_mp3_toggle.isChecked())
+        self.conversion_progress_bar = QProgressBar()
+        self.conversion_progress_bar.setVisible(self.convert_mp3_toggle.isChecked())
+        self.conversion_progress_bar.setFormat("%p% (%v/%m)")
+        self.conversion_progress_bar.setMinimum(0)
+        self.conversion_progress_bar.setMaximum(100)
+        self.conversion_progress_bar.setValue(0)
+        self.conversion_progress_bar.setFont(bold_font)
+        # No per-widget stylesheet here; rely on global stylesheet
+        conversion_section.addWidget(self.conversion_label)
+        conversion_section.addWidget(self.conversion_progress_bar)
+        progress_layout.addLayout(conversion_section)
+
+        # Output area
+        self.output_area = QTextEdit()
+        self.output_area.setReadOnly(True)
+        self.output_area.setMinimumHeight(200)
+        self.output_area.setFont(modern_font)
+        # No per-widget stylesheet here; rely on global stylesheet
+        progress_layout.addWidget(self.output_area)
+        main_layout.addWidget(self.progress_card)
+
+        # Apply initial theme
+        self.apply_theme()
+
+    def set_mp3_icon(self, checked: bool):
+        if checked:
+            self.convert_mp3_toggle.setIcon(QIcon("mp3icon.png"))
+        else:
+            self.convert_mp3_toggle.setIcon(QIcon())
+
+    def toggle_mp3_conversion(self, checked: bool) -> None:
+        _app_settings["convert_to_mp3_only"] = checked
+        config_manager.set("convert_to_mp3_only", checked)
+        self.set_mp3_icon(checked)
+        if hasattr(self, 'conversion_label'):
+            self.conversion_label.setVisible(checked)
+        if hasattr(self, 'conversion_progress_bar'):
+            self.conversion_progress_bar.setVisible(checked)
+            if not checked:
+                self.conversion_progress_bar.setValue(0)
+
+    def create_button(self, text: str, handler: Callable, font: QFont, enabled: bool = True) -> QPushButton:
+        button = QPushButton(text)
+        button.setFont(font)
+        button.clicked.connect(handler)
+        button.setEnabled(enabled)
+        button.setStyleSheet("""
+            QPushButton {
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 24px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #357ab8;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
+        return button
+
+    def create_input_field(self, label_text: str, placeholder: str, parent_layout: QVBoxLayout, label_font: QFont, input_font: QFont) -> QLineEdit:
+        layout = QVBoxLayout()
+        label = QLabel(label_text)
+        label.setFont(label_font)
+        layout.addWidget(label)
+        input_field = QLineEdit()
+        input_field.setPlaceholderText(placeholder)
+        input_field.setFont(input_font)
+        # No per-widget stylesheet here; rely on global stylesheet
+        layout.addWidget(input_field)
+        parent_layout.addLayout(layout)
+        return input_field, label
+
+    def create_progress_bar(self, label_text: str, parent_layout: QVBoxLayout, label_font: QFont) -> QProgressBar:
+        layout = QVBoxLayout()
+        label = QLabel(label_text)
+        label.setFont(label_font)
+        progress_bar = QProgressBar()
+        progress_bar.setMinimum(0)
+        progress_bar.setMaximum(100)
+        progress_bar.setValue(0)
+        progress_bar.setTextVisible(True)
+        progress_bar.setFormat("%p% (%v/%m)")
+        progress_bar.setFont(label_font)
+        # No per-widget stylesheet here; rely on global stylesheet
+        layout.addWidget(label)
+        layout.addWidget(progress_bar)
+        parent_layout.addLayout(layout)
+        return progress_bar
+
+    def browse_and_set_output_folder(self) -> None:
+        """Open folder dialog and set output path."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
+        if folder:
+            self.download_folder_input.setText(folder)
+            _app_settings["tidal_dl_ng_config"]["download_base_path"] = folder
+            config_manager.save_settings()
+            self.log(f"✅ Output folder set and saved: {folder}")
+
+    def log(self, message: str) -> None:
+        """Add message to log output with visual improvements."""
+        # Skip character-by-character output
+        if len(message.strip()) <= 1:
+            return
+            
+        # Skip progress bar updates
+        if message.startswith("\r") or message.startswith("\b"):
+            return
+            
+        # Skip empty or whitespace-only messages
+        if not message.strip():
+            return
+            
+        # Filter out technical details for GUI
+        if any(tech_term in message.lower() for tech_term in [
+            "wsl", "bash", "command:", "subprocess", "traceback", "debug", "error code",
+            "return code", "process", "thread", "socket", "connection", "api", "http",
+            "request", "response", "config", "settings", "path", "directory", "file",
+            "permission", "access", "token", "auth", "login", "session", "cache"
+        ]):
+            # Log technical details only to debug logger
+            log_message(message, "DEBUG", gui_only=False)
+            return
+            
+        # Add emojis for different types of messages
+        if message.startswith("✅"):
+            message = f"✅ {message[1:].strip()}"
+        elif message.startswith("❌"):
+            message = f"❌ {message[1:].strip()}"
+        elif message.startswith("⚠️"):
+            message = f"⚠️ {message[1:].strip()}"
+        elif "error" in message.lower():
+            message = f"❌ {message}"
+        elif "warning" in message.lower():
+            message = f"⚠️ {message}"
+        elif "success" in message.lower():
+            message = f"✅ {message}"
+            
+        # Add the message to the output area
+        self.output_area.append(message)
+        
+        # Log the message using our custom logging function
+        log_message(message, "INFO", gui_only=True)
+        
+        # Ensure the UI updates
+        QApplication.processEvents()
+        
+        # Auto-scroll to the bottom
+        self.output_area.verticalScrollBar().setValue(
+            self.output_area.verticalScrollBar().maximum()
+        )
+
+    def update_progress(self, current: int, total: int) -> None:
+        """Update progress bar."""
+        self.download_progress_bar.setMaximum(total)
+        self.download_progress_bar.setValue(current)
+        QApplication.processEvents()
+
+    def handle_url_input_change(self, text):
+        is_spotify = ("spotify.com" in text or "spotify:" in text)
+        needs_name = is_spotify and ("playlist" in text or "album" in text or "track" in text)
+        self.tidal_name_input.setVisible(needs_name)
+        self.tidal_name_label.setVisible(needs_name)
+
+    def run_transfer(self) -> None:
+        self.set_progress_label("Transfer Progress")
+        url = self.url_input.text().strip()
+        tidal_playlist_name = self.tidal_name_input.text().strip() if self.tidal_name_input.isVisible() else ""
+        download_folder = self.download_folder_input.text().strip()
+        
+        if not url:
+            QMessageBox.critical(self, "Error", "Please enter a source URL.")
+            return
+            
+        if not download_folder:
+            QMessageBox.critical(self, "Error", "Please select an output folder.")
+            return
+            
+        if self.tidal_name_input.isVisible() and not tidal_playlist_name:
+            QMessageBox.critical(self, "Error", "Please enter a name for the Tidal playlist.")
+            return
+            
+        # Create the folder if it doesn't exist
+        if not os.path.exists(download_folder):
+            try:
+                os.makedirs(download_folder, exist_ok=True)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, 
+                    "Error", 
+                    f"Failed to create output folder: {str(e)}"
+                )
+                return
+                
+        self.update_tidal_config_output()
+        self.output_area.clear()
+        
+        if "spotify.com" in url or "spotify:" in url:
+            if "playlist" in url:
+                tracks = self.manager.get_spotify_tracks(url)
+            elif "album" in url:
+                tracks = self.manager.get_spotify_album_tracks(url)
+            elif "track" in url:
+                tracks = self.manager.get_spotify_track(url)
+            else:
+                QMessageBox.critical(
+                    self, 
+                    "Error", 
+                    "Unsupported Spotify URL format."
+                )
+                return
+                
+            self.log(f"Transferring from Spotify to Tidal:\nSource URL: {url}\nTidal Playlist: {tidal_playlist_name}")
+            self.transfer_button.setEnabled(False)
+            self.download_button.setEnabled(False)
+            self.download_progress_bar.setValue(0)
+            
+            try:
+                playlist, unmatched, playlist_url = self.manager.create_tidal_playlist(
+                    tidal_playlist_name,
+                    tracks,
+                    output_callback=self.log,
+                    progress_callback=self.update_transfer_progress
+                )
+                
+                self.log("\nSuccess: Tidal playlist created!")
+                self.log(f"Playlist URL: {playlist_url}")
+                self.log(f"Transferred: {len(tracks) - len(unmatched)}/{len(tracks)} tracks")
+                
+                if unmatched:
+                    self.log("\nUnmatched Tracks:")
+                    for track in unmatched:
+                        self.log(f"- {track['name']} by {track['artist']} (Album: {track['album']})")
+                        
+                self.playlist_url = playlist_url
+                self.total_tracks = len(tracks) - len(unmatched)
+                self.download_button.setEnabled(True)
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self, 
+                    "Error", 
+                    f"Transfer failed: {str(e)}"
+                )
+            finally:
+                self.transfer_button.setEnabled(True)
+                
+        elif "tidal.com" in url:
+            self.log("Tidal URL detected. No conversion needed.")
+            self.playlist_url = url
+            self.download_button.setEnabled(True)
+        else:
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                "URL is neither a valid Spotify nor Tidal link."
+            )
+
+    def start_download(self) -> None:
+        self.set_progress_label("Download Progress")
+        self.download_button.setEnabled(False)
+        self.log("\nStarting download process...")
+        self.download_progress_bar.setMaximum(self.total_tracks)
+        self.download_progress_bar.setValue(0)
+        self.download_progress_bar.setFormat("Downloading: %p% (%v/%m)")
+        self.conversion_progress_bar.setMaximum(100)  # Set to 100 for percentage-based updates
+        self.conversion_progress_bar.setValue(0)
+        self.conversion_progress_bar.setFormat("Converting: %p% (%v/%m)")
+        self.conversion_label.setText("")
+
+        sudo_token = _app_settings.get("sudo_password_encrypted")
+        sudo_pass = decrypt_password(sudo_token) if sudo_token else None
+        if not sudo_pass:
+            sudo_pass = get_or_prompt_sudo_password(self)
+            if not sudo_pass:
+                self.log("❌ Sudo password is required for download and conversion.")
+                self.download_button.setEnabled(True)
+                return
+            _app_settings["sudo_password_encrypted"] = encrypt_password(sudo_pass)
+            config_manager.set("sudo_password_encrypted", encrypt_password(sudo_pass))
+
+        self.download_thread = DownloadThread(
+            self.playlist_url, 
+            self.total_tracks,
+            self.download_folder_input.text()
+        )
+        self.download_thread.sudo_password = sudo_pass
+        self.download_thread.convert_to_mp3 = _app_settings.get("convert_to_mp3_only", False)
+        self.download_thread.update_log.connect(self.log)
+        self.download_thread.update_progress.connect(self.update_download_progress)
+        self.download_thread.update_conversion_progress.connect(self.update_conversion_progress)
+        self.download_thread.finished.connect(self.download_finished)
+        self.download_thread.password_required.connect(self.handle_password_request)
+        self.download_thread.start()
+
+    def update_tidal_config_output(self) -> None:
+        """Update Tidal config with output path."""
+        wsl_home = get_wsl_home()
+        tidal_tmp = f"{wsl_home}/tidal_tmp"
+        config_dir = f"{wsl_home}/.config/tidal_dl_ng"
+        config_path = f"{config_dir}/settings.json"
+        
+        # Create directories if they don't exist
+        subprocess.run(
+            ['wsl', 'bash', '-c', f"mkdir -p {config_dir} && mkdir -p {tidal_tmp}"],
+            check=True
+        )
+        
+        # Get FFmpeg path in WSL
+        ffmpeg_path = _app_settings["tidal_dl_ng_config"].get("path_binary_ffmpeg", "")
+        if not ffmpeg_path:
+            # Try to find FFmpeg
+            result = subprocess.run(
+                ['wsl', 'bash', '-c', 'which ffmpeg'],
+                capture_output=True,
+                text=True
+            )
+            ffmpeg_path = result.stdout.strip() if result.stdout.strip() else "/usr/bin/ffmpeg"
+        
+        # Verify FFmpeg is working
+        verify_cmd = f'wsl bash -c "{ffmpeg_path} -version"'
+        verify_result = subprocess.run(verify_cmd, shell=True, capture_output=True, text=True)
+        if verify_result.returncode != 0:
+            self.log("⚠️ Warning: FFmpeg verification failed. Attempting to reinstall...")
+            if ensure_ffmpeg_installed(None):
+                result = subprocess.run(
+                    ['wsl', 'bash', '-c', 'which ffmpeg'],
+                    capture_output=True,
+                    text=True
+                )
+                ffmpeg_path = result.stdout.strip()
+            else:
+                self.log("⚠️ Warning: Could not verify FFmpeg installation. Some features may be limited.")
+        
+        # Update app settings
+        _app_settings["tidal_dl_ng_config"]["download_base_path"] = tidal_tmp
+        _app_settings["tidal_dl_ng_config"]["path_binary_ffmpeg"] = ffmpeg_path
+        config_manager.save_settings()
+        
+        # Create Tidal config file with all necessary settings
+        tidal_config = {
+            "download_base_path": tidal_tmp,
+            "path_binary_ffmpeg": ffmpeg_path,
+            "skip_existing": True,
+            "lyrics_embed": False,
+            "lyrics_file": False,
+            "video_download": True,
+            "download_delay": True,
+            "quality_audio": "HIGH",
+            "quality_video": "480",
+            "format_album": "Albums/{album_artist} - {album_title}{album_explicit}/{track_volume_num_optional}{album_track_num}",
+            "format_playlist": "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}",
+            "format_mix": "Mix/{mix_name}/{artist_name} - {track_title}",
+            "format_track": "Tracks/{artist_name} - {track_title}{track_explicit}",
+            "format_video": "Videos/{artist_name} - {track_title}{track_explicit}",
+            "video_convert_mp4": True,
+            "metadata_cover_dimension": "320",
+            "metadata_cover_embed": True,
+            "cover_album_file": True,
+            "extract_flac": True,
+            "downloads_simultaneous_per_track_max": 20,
+            "download_delay_sec_min": 3.0,
+            "download_delay_sec_max": 5.0,
+            "album_track_num_pad_min": 1,
+            "downloads_concurrent_max": 3,
+            "symlink_to_track": False
+        }
+        
+        json_str = json.dumps(tidal_config, indent=4).replace('"', '\\"')
+        bash_cmd = f'echo "{json_str}" > {config_path}'
+        subprocess.run(
+            ['wsl', 'bash', '-c', bash_cmd], 
+            check=True
+        )
+        
+        self.log(f"Tidal downloads will go to temp WSL path: {tidal_tmp}")
+        self.log(f"FFmpeg path set to: {ffmpeg_path}")
+        if verify_result.returncode == 0:
+            self.log("FFmpeg verification successful!")
+
+    def apply_theme(self) -> None:
+        """Apply light or dark theme based on settings."""
+        if _app_settings.get("dark_mode", False):
+            self.apply_dark_mode()
+        else:
+            self.apply_light_mode()
+
+    def apply_light_mode(self) -> None:
+        """Apply light mode theme."""
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f9fafb;
+                color: #222831;
+                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QLineEdit {
+                background-color: #f7f8fa;
+                color: #222831;
+                border: 1.5px solid #b0b8c1;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QLineEdit:disabled {
+                background-color: #eceef1;
+                color: #a0a4aa;
+            }
+            QLineEdit::placeholder {
+                color: #8a99b3;
+                font-size: 16px;
+            }
+            QPushButton {
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 12px 28px;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #357ab8;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+            QProgressBar {
+                border: 2px solid #b0b8c1;
+                border-radius: 10px;
+                background: #f7f8fa;
+                height: 32px;
+                font-weight: bold;
+                font-size: 16px;
+                text-align: center;
+                color: #222831;
+            }
+            QProgressBar::chunk {
+                background-color: #4a90e2;
+                border-radius: 8px;
+            }
+            QTextEdit {
+                background-color: #f7f8fa;
+                border: 1.5px solid #b0b8c1;
+                border-radius: 8px;
+                padding: 10px;
+                color: #222831;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QCheckBox {
+                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+                spacing: 5px;
+                padding: 7px;
+            }
+            QCheckBox::indicator {
+                width: 22px;
+                height: 22px;
+            }
+            QLabel {
+                font-size: 18px;
+                font-weight: bold;
+            }
+        """)
+
+    def apply_dark_mode(self) -> None:
+        """Apply dark mode theme."""
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #16181c;
+                color: #e0e6ed;
+                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QLineEdit {
+                background-color: #18191d;
+                color: #e0e6ed;
+                border: 1.5px solid #444a54;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QLineEdit:disabled {
+                background-color: #18191d;
+                color: #6c7380;
+            }
+            QLineEdit::placeholder {
+                color: #7a869a;
+                font-size: 16px;
+            }
+            QPushButton {
+                background-color: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 12px 28px;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #357ab8;
+            }
+            QPushButton:disabled {
+                background-color: #444a54;
+            }
+            QProgressBar {
+                border: 2px solid #444a54;
+                border-radius: 10px;
+                background: #18191d;
+                height: 32px;
+                font-weight: bold;
+                font-size: 16px;
+                text-align: center;
+                color: #e0e6ed;
+            }
+            QProgressBar::chunk {
+                background-color: #4a90e2;
+                border-radius: 8px;
+            }
+            QTextEdit {
+                background-color: #18191d;
+                border: 1.5px solid #444a54;
+                border-radius: 8px;
+                padding: 10px;
+                color: #e0e6ed;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QCheckBox {
+                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                font-weight: 600;
+                spacing: 5px;
+                padding: 7px;
+            }
+            QCheckBox::indicator {
+                width: 22px;
+                height: 22px;
+            }
+            QLabel {
+                font-size: 18px;
+                font-weight: bold;
+            }
+        """)
+
+    def toggle_dark_mode(self, checked: bool) -> None:
+        """Toggle between light and dark mode."""
+        _app_settings["dark_mode"] = checked
+        config_manager.set("dark_mode", checked)
+        
+        if checked:
+            self.apply_dark_mode()
+        else:
+            self.apply_light_mode()
+            
+        # Add fade animation
+        effect = QGraphicsOpacityEffect(self.input_card)
+        self.input_card.setGraphicsEffect(effect)
+        
+        self.anim = QPropertyAnimation(effect, b"opacity")
+        self.anim.setDuration(300)
+        self.anim.setStartValue(0.0)
+        self.anim.setEndValue(1.0)
+        self.anim.finished.connect(
+            lambda: self.input_card.setGraphicsEffect(None)
+        )
+        self.anim.start()
+    
+    def download_finished(self, success: bool) -> None:
+        """Handle download completion."""
+        try:
+            if success:
+                self.log("\n✅ Download completed successfully!")
+                self.download_progress_bar.setValue(self.download_progress_bar.maximum())
+                
+                # Get the WSL temp folder and Windows output folder
+                wsl_home = get_wsl_home()
+                wsl_folder = f"{wsl_home}/tidal_tmp"
+                windows_folder = self.download_folder_input.text().strip()
+                
+                if not windows_folder:
+                    self.log("Error: No output folder specified")
+                    return
+                
+                # Verify WSL folder exists
+                verify_cmd = f'wsl bash -c "if [ -d \\"{wsl_folder}\\" ]; then echo exists; else echo not_found; fi"'
+                result = subprocess.run(verify_cmd, shell=True, capture_output=True, text=True)
+                
+                if "not_found" in result.stdout:
+                    self.log(f"Error: WSL folder not found: {wsl_folder}")
+                    return
+                
+                # Sync files from WSL to Windows
+                self.log("\nSyncing files from WSL to Windows...")
+                if self.download_thread:
+                    try:
+                        self.download_thread.copy_from_wsl_to_windows(wsl_folder, windows_folder)
+                    except Exception as e:
+                        self.log(f"Error during file transfer: {str(e)}")
+                        import traceback
+                        self.log(f"Traceback: {traceback.format_exc()}")
+                        return
+                
+                # Convert to MP3 if needed
+                if _app_settings.get("convert_to_mp3_only", False):
+                    self.log("\nConverting files to MP3...")
+                    try:
+                        self.download_thread.convert_all_to_mp3(windows_folder)
+                    except Exception as e:
+                        self.log(f"Error during MP3 conversion: {str(e)}")
+                        import traceback
+                        self.log(f"Traceback: {traceback.format_exc()}")
+            else:
+                self.log("\n❌ Download failed!")
+                
+        except Exception as e:
+            self.log(f"\n⚠️ Error in download_finished: {str(e)}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            try:
+                self.download_button.setEnabled(True)
+                self.log("\nProcess completed.")
+            except Exception as e:
+                self.log(f"Error re-enabling download button: {str(e)}")
+
+    def closeEvent(self, event) -> None:
+        """Handle application close event."""
+        try:
+            # Clean up any running threads
+            if hasattr(self, 'download_thread') and self.download_thread and self.download_thread.isRunning():
+                self.download_thread.terminate()
+                self.download_thread.wait()
+                
+            # Clean up WSL temp directory
+            if platform.system() == "Windows":
+                wsl_home = get_wsl_home()
+                wsl_temp_path = f"{wsl_home}/tidal_tmp"
+                subprocess.run(
+                    ['wsl', 'bash', '-c', f'rm -rf "{wsl_temp_path}"'],
+                    capture_output=True
+                )
+        except Exception as e:
+            log_message("Error during cleanup: %s", e)
+            
+        event.accept()
+
+    def handle_password_request(self) -> None:
+        """Handle password request from download thread."""
+        stored_token = _app_settings.get("sudo_password_encrypted")
+        sudo_pass = decrypt_password(stored_token) if stored_token else None
+        if not sudo_pass:
+            self.log("Error: No stored sudo password found. Please run the application again.")
+            self.download_thread.set_password_verified(False)
+            return
+
+        sudo_pass = get_or_prompt_sudo_password(self)
+        if not sudo_pass:
+            self.log("Error: Sudo password is required for file operations.")
+            self.download_thread.set_password_verified(False)
+            return
+
+        self.download_thread.sudo_password = sudo_pass
+        self.download_thread.set_password_verified(True)
+
+    def set_progress_label(self, text: str):
+        if hasattr(self, 'progress_label'):
+            self.progress_label.setText(text)
+
+    # --- Conversion Progress Bar Realism ---
+    def update_conversion_progress(self, current: int, total: int) -> None:
+        if not hasattr(self, 'conversion_progress_bar'):
+            return
+        self.conversion_progress_bar.setMaximum(total)
+        self.conversion_progress_bar.setValue(current)
+        if hasattr(self, 'conversion_label'):
+            if current < total:
+                self.conversion_label.setText(f"Converting file {current} of {total}...")
+            else:
+                self.conversion_label.setText("Conversion complete!")
+        QApplication.processEvents()
+
+    def update_transfer_progress(self, current: int, total: int) -> None:
+        """Update progress bar for transfer progress."""
+        self.download_progress_bar.setMaximum(total)
+        self.download_progress_bar.setValue(current)
+        QApplication.processEvents()
+
+    def update_download_progress(self, current: int) -> None:
+        """Update progress bar for download progress."""
+        if not hasattr(self, 'total_tracks') or self.total_tracks <= 0:
+            return
+        self.download_progress_bar.setMaximum(self.total_tracks)
+        self.download_progress_bar.setValue(current)
+        QApplication.processEvents()
+
+# --- Encryption helpers ---
+ENCRYPTION_KEY_FILE = os.path.join(os.path.expanduser("~"), ".spotifytotidal_key")
+
+def get_encryption_key() -> Optional[bytes]:
+    if not os.path.exists(ENCRYPTION_KEY_FILE):
+        key = Fernet.generate_key()
+        with open(ENCRYPTION_KEY_FILE, "wb") as f:
+            f.write(key)
+        return key
+    with open(ENCRYPTION_KEY_FILE, "rb") as f:
+        return f.read()
+
+def encrypt_password(password: str) -> str:
+    key = get_encryption_key()
+    f = Fernet(key)
+    return f.encrypt(password.encode()).decode()
+
+def decrypt_password(token: str) -> Optional[str]:
+    try:
+        key = get_encryption_key()
+        f = Fernet(key)
+        return f.decrypt(token.encode()).decode()
+    except Exception:
+        return None
 
 # ------------------- Config Management -------------------
 SETTINGS_FILE = os.getenv("APP_SETTINGS_FILE", "app_settings.json")
@@ -1210,956 +2224,29 @@ class DownloadThread(QThread):
         """Set password verification status."""
         self._password_verified = verified
 
-# ------------------- Main Application UI -------------------
-class SpotifyToTidalApp(QWidget):
-    """Main application window."""
-    def __init__(self) -> None:
-        super().__init__()
-        self.setup_application()
-        self.setup_ui()
-        self.apply_theme()
-        
-        # Initialize transfer manager with debug_logger
-        self.manager = TransferManager(debug_logger)
-        
-        # Initialize Spotify client
-        try:
-            spotify_auth = SpotifyAuthManager(self)
-            global sp
-            sp = spotify_auth.get_spotify_client()
-        except Exception as e:
-            QMessageBox.critical(
-                self, 
-                "Spotify Login Error", 
-                f"Failed to log in to Spotify: {str(e)}\nPlease try again."
-            )
-            sys.exit(1)
-            
-        # Verify installations and setup
-        try:
-            if platform.system() == "Windows":
-                # Get sudo password first
-                sudo_pass = get_or_prompt_sudo_password(self)
-                if not sudo_pass:
-                    QMessageBox.critical(
-                        self, 
-                        "Error", 
-                        "Sudo password is required for installation."
-                    )
-                    sys.exit(1)
-
-                if not ensure_tidal_dl_ng_installed(self):
-                    QMessageBox.critical(
-                        self, 
-                        "Installation Error", 
-                        "tidal-dl-ng installation failed. Please ensure WSL is properly installed and configured."
-                    )
-                    sys.exit(1)
-                    
-            if not ensure_ffmpeg_installed(self):
-                QMessageBox.critical(
-                    self,
-                    "FFmpeg Error",
-                    "FFmpeg installation failed. Please install FFmpeg manually."
-                )
-                sys.exit(1)
-                
-            ensure_ffmpeg_path_set(self)
-            
-            # Try to login to Tidal
-            try:
-                self.manager.login_tidal()
-            except Exception as e:
-                QMessageBox.critical(
-                    self, 
-                    "Tidal Login Error", 
-                    f"Failed to log in to Tidal: {str(e)}\nPlease try again."
-                )
-                sys.exit(1)
-                
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Initialization Error",
-                f"Failed to initialize application: {str(e)}"
-            )
-            sys.exit(1)
-            
-        self.playlist_url: Optional[str] = None
-        self.total_tracks: int = 0
-        self.download_thread: Optional[DownloadThread] = None
-
-    def setup_application(self) -> None:
-        """Configure application settings."""
-        self.setWindowTitle("Spotify to Tidal Transfer & Downloader")
-        self.setMinimumSize(1000, 800)
-        self.setWindowIcon(QIcon(_app_settings.get("ui", {}).get("window_icon", "logo.png")))
-
-    def setup_ui(self) -> None:
-        """Set up the user interface."""
-        # Modern font setup
-        modern_font = QFont("Inter", 11)
-        modern_font.setWeight(QFont.Medium)
-        bold_font = QFont("Inter", 14, QFont.Bold)
-        header_font = QFont("Inter", 22, QFont.Bold)
-
-        # Main layout
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-
-        # Top section with logo and title
-        top_layout = QHBoxLayout()
-        
-        # Logo
-        logo_label = QLabel()
-        logo_pixmap = QPixmap("logo.png")
-        if not logo_pixmap.isNull():
-            logo_pixmap = logo_pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_label.setPixmap(logo_pixmap)
-        else:
-            logo_label.setText("Logo")
-        top_layout.addWidget(logo_label)
-
-        # Title and subtitle
-        title_layout = QVBoxLayout()
-        title_label = QLabel("Spotify to Tidal Transfer")
-        title_label.setFont(header_font)
-        subtitle_label = QLabel("Transfer your playlists, albums, and tracks from Spotify to Tidal")
-        subtitle_label.setFont(modern_font)
-        subtitle_label.setStyleSheet("color: #666666;")
-        title_layout.addWidget(title_label)
-        title_layout.addWidget(subtitle_label)
-        top_layout.addLayout(title_layout)
-        top_layout.addStretch()
-
-        # MP3 Conversion Toggle as Icon Button
-        self.convert_mp3_toggle = QPushButton()
-        self.convert_mp3_toggle.setCheckable(True)
-        self.convert_mp3_toggle.setChecked(_app_settings.get("convert_to_mp3_only", False))
-        self.convert_mp3_toggle.setFixedSize(48, 48)
-        self.convert_mp3_toggle.setIconSize(QSize(40, 40))
-        self.convert_mp3_toggle.setStyleSheet("""
-            QPushButton {
-                border: 2px solid #d0d0d0;
-                border-radius: 12px;
-                background: #f8f8f8;
-            }
-            QPushButton:checked {
-                border: 2px solid #4a90e2;
-                background: #eaf4ff;
-            }
-        """)
-        self.convert_mp3_toggle.clicked.connect(self.toggle_mp3_conversion)
-        self.set_mp3_icon(self.convert_mp3_toggle.isChecked())
-        top_layout.addWidget(self.convert_mp3_toggle)
-
-        main_layout.addLayout(top_layout)
-
-        # Input card
-        self.input_card = QFrame()
-        self.input_card.setObjectName("inputCard")
-        input_layout = QVBoxLayout(self.input_card)
-        input_layout.setSpacing(15)
-
-        # URL input
-        self.url_input = self.create_input_field("Spotify URL", "Enter Spotify playlist, album, or track URL", input_layout, bold_font, modern_font)[0]
-        self.url_input.textChanged.connect(self.handle_url_input_change)
-
-        # Tidal Playlist Name input (initially hidden)
-        self.tidal_name_input, self.tidal_name_label = self.create_input_field("Tidal Playlist Name", "Enter a name for the new Tidal playlist", input_layout, bold_font, modern_font)
-        self.tidal_name_input.setVisible(False)
-        self.tidal_name_label.setVisible(False)
-        
-        # Output folder input
-        folder_layout = QHBoxLayout()
-        self.download_folder_input, self.download_folder_label = self.create_input_field("Output Folder", "Select download location", folder_layout, bold_font, modern_font)
-        self.download_folder_input.setText(_app_settings.get("download_folder", ""))
-        browse_button = QPushButton("Browse")
-        browse_button.setFont(modern_font)
-        browse_button.clicked.connect(self.browse_and_set_output_folder)
-        folder_layout.addWidget(browse_button)
-        input_layout.addLayout(folder_layout)
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        self.transfer_button = self.create_button("Transfer to Tidal", self.run_transfer, modern_font)
-        self.download_button = self.create_button("Download from Tidal", self.start_download, modern_font)
-        self.download_button.setEnabled(False)
-        
-        # Dark mode toggle
-        self.dark_mode_toggle = QCheckBox("")
-        self.dark_mode_toggle.setStyleSheet(f"""
-            QCheckBox::indicator {{
-                width: 32px;
-                height: 32px;
-            }}
-            QCheckBox::indicator:unchecked {{
-                image: url({_app_settings["ui"]["toggle_unchecked_icon"]});
-            }}
-            QCheckBox::indicator:checked {{
-                image: url({_app_settings["ui"]["toggle_checked_icon"]});
-            }}
-        """)
-        self.dark_mode_toggle.setChecked(_app_settings.get("dark_mode", False))
-        self.dark_mode_toggle.toggled.connect(self.toggle_dark_mode)
-        
-        button_layout.addWidget(self.transfer_button)
-        button_layout.addWidget(self.download_button)
-        button_layout.addWidget(self.dark_mode_toggle)
-        input_layout.addLayout(button_layout)
-        main_layout.addWidget(self.input_card)
-
-        # Progress card
-        self.progress_card = QFrame()
-        self.progress_card.setObjectName("progressCard")
-        progress_layout = QVBoxLayout(self.progress_card)
-        progress_layout.setSpacing(15)
-
-        # Progress bars
-        self.progress_label = QLabel("Transfer Progress")
-        self.progress_label.setFont(bold_font)
-        progress_layout.addWidget(self.progress_label)
-        self.download_progress_bar = self.create_progress_bar("", progress_layout, bold_font)
-        
-        # Conversion progress section
-        conversion_section = QVBoxLayout()
-        self.conversion_label = QLabel("Converting to MP3...")
-        self.conversion_label.setFont(bold_font)
-        self.conversion_label.setVisible(self.convert_mp3_toggle.isChecked())
-        self.conversion_progress_bar = QProgressBar()
-        self.conversion_progress_bar.setVisible(self.convert_mp3_toggle.isChecked())
-        self.conversion_progress_bar.setFormat("%p% (%v/%m)")
-        self.conversion_progress_bar.setMinimum(0)
-        self.conversion_progress_bar.setMaximum(100)
-        self.conversion_progress_bar.setValue(0)
-        self.conversion_progress_bar.setFont(bold_font)
-        # No per-widget stylesheet here; rely on global stylesheet
-        conversion_section.addWidget(self.conversion_label)
-        conversion_section.addWidget(self.conversion_progress_bar)
-        progress_layout.addLayout(conversion_section)
-
-        # Output area
-        self.output_area = QTextEdit()
-        self.output_area.setReadOnly(True)
-        self.output_area.setMinimumHeight(200)
-        self.output_area.setFont(modern_font)
-        # No per-widget stylesheet here; rely on global stylesheet
-        progress_layout.addWidget(self.output_area)
-        main_layout.addWidget(self.progress_card)
-
-        # Apply initial theme
-        self.apply_theme()
-
-    def set_mp3_icon(self, checked: bool):
-        if checked:
-            self.convert_mp3_toggle.setIcon(QIcon("mp3icon.png"))
-        else:
-            self.convert_mp3_toggle.setIcon(QIcon())
-
-    def toggle_mp3_conversion(self, checked: bool) -> None:
-        _app_settings["convert_to_mp3_only"] = checked
-        config_manager.set("convert_to_mp3_only", checked)
-        self.set_mp3_icon(checked)
-        if hasattr(self, 'conversion_label'):
-            self.conversion_label.setVisible(checked)
-        if hasattr(self, 'conversion_progress_bar'):
-            self.conversion_progress_bar.setVisible(checked)
-            if not checked:
-                self.conversion_progress_bar.setValue(0)
-
-    def create_button(self, text: str, handler: Callable, font: QFont, enabled: bool = True) -> QPushButton:
-        button = QPushButton(text)
-        button.setFont(font)
-        button.clicked.connect(handler)
-        button.setEnabled(enabled)
-        button.setStyleSheet("""
-            QPushButton {
-                background-color: #4a90e2;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 24px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #357ab8;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
-        return button
-
-    def create_input_field(self, label_text: str, placeholder: str, parent_layout: QVBoxLayout, label_font: QFont, input_font: QFont) -> QLineEdit:
-        layout = QVBoxLayout()
-        label = QLabel(label_text)
-        label.setFont(label_font)
-        layout.addWidget(label)
-        input_field = QLineEdit()
-        input_field.setPlaceholderText(placeholder)
-        input_field.setFont(input_font)
-        # No per-widget stylesheet here; rely on global stylesheet
-        layout.addWidget(input_field)
-        parent_layout.addLayout(layout)
-        return input_field, label
-
-    def create_progress_bar(self, label_text: str, parent_layout: QVBoxLayout, label_font: QFont) -> QProgressBar:
-        layout = QVBoxLayout()
-        label = QLabel(label_text)
-        label.setFont(label_font)
-        progress_bar = QProgressBar()
-        progress_bar.setMinimum(0)
-        progress_bar.setMaximum(100)
-        progress_bar.setValue(0)
-        progress_bar.setTextVisible(True)
-        progress_bar.setFormat("%p% (%v/%m)")
-        progress_bar.setFont(label_font)
-        # No per-widget stylesheet here; rely on global stylesheet
-        layout.addWidget(label)
-        layout.addWidget(progress_bar)
-        parent_layout.addLayout(layout)
-        return progress_bar
-
-    def browse_and_set_output_folder(self) -> None:
-        """Open folder dialog and set output path."""
-        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
-        if folder:
-            self.download_folder_input.setText(folder)
-            _app_settings["tidal_dl_ng_config"]["download_base_path"] = folder
-            config_manager.save_settings()
-            self.log(f"✅ Output folder set and saved: {folder}")
-
-    def log(self, message: str) -> None:
-        """Add message to log output with visual improvements."""
-        # Skip character-by-character output
-        if len(message.strip()) <= 1:
-            return
-            
-        # Skip progress bar updates
-        if message.startswith("\r") or message.startswith("\b"):
-            return
-            
-        # Skip empty or whitespace-only messages
-        if not message.strip():
-            return
-            
-        # Filter out technical details for GUI
-        if any(tech_term in message.lower() for tech_term in [
-            "wsl", "bash", "command:", "subprocess", "traceback", "debug", "error code",
-            "return code", "process", "thread", "socket", "connection", "api", "http",
-            "request", "response", "config", "settings", "path", "directory", "file",
-            "permission", "access", "token", "auth", "login", "session", "cache"
-        ]):
-            # Log technical details only to debug logger
-            log_message(message, "DEBUG", gui_only=False)
-            return
-            
-        # Add emojis for different types of messages
-        if message.startswith("✅"):
-            message = f"✅ {message[1:].strip()}"
-        elif message.startswith("❌"):
-            message = f"❌ {message[1:].strip()}"
-        elif message.startswith("⚠️"):
-            message = f"⚠️ {message[1:].strip()}"
-        elif "error" in message.lower():
-            message = f"❌ {message}"
-        elif "warning" in message.lower():
-            message = f"⚠️ {message}"
-        elif "success" in message.lower():
-            message = f"✅ {message}"
-            
-        # Add the message to the output area
-        self.output_area.append(message)
-        
-        # Log the message using our custom logging function
-        log_message(message, "INFO", gui_only=True)
-        
-        # Ensure the UI updates
-        QApplication.processEvents()
-        
-        # Auto-scroll to the bottom
-        self.output_area.verticalScrollBar().setValue(
-            self.output_area.verticalScrollBar().maximum()
-        )
-
-    def update_progress(self, current: int, total: int) -> None:
-        """Update progress bar."""
-        self.download_progress_bar.setMaximum(total)
-        self.download_progress_bar.setValue(current)
-        QApplication.processEvents()
-
-    def handle_url_input_change(self, text):
-        is_spotify = ("spotify.com" in text or "spotify:" in text)
-        needs_name = is_spotify and ("playlist" in text or "album" in text or "track" in text)
-        self.tidal_name_input.setVisible(needs_name)
-        self.tidal_name_label.setVisible(needs_name)
-
-    def run_transfer(self) -> None:
-        self.set_progress_label("Transfer Progress")
-        url = self.url_input.text().strip()
-        tidal_playlist_name = self.tidal_name_input.text().strip() if self.tidal_name_input.isVisible() else ""
-        download_folder = self.download_folder_input.text().strip()
-        
-        if not url:
-            QMessageBox.critical(self, "Error", "Please enter a source URL.")
-            return
-            
-        if not download_folder:
-            QMessageBox.critical(self, "Error", "Please select an output folder.")
-            return
-            
-        if self.tidal_name_input.isVisible() and not tidal_playlist_name:
-            QMessageBox.critical(self, "Error", "Please enter a name for the Tidal playlist.")
-            return
-            
-        # Create the folder if it doesn't exist
-        if not os.path.exists(download_folder):
-            try:
-                os.makedirs(download_folder, exist_ok=True)
-            except Exception as e:
-                QMessageBox.critical(
-                    self, 
-                    "Error", 
-                    f"Failed to create output folder: {str(e)}"
-                )
-                return
-                
-        self.update_tidal_config_output()
-        self.output_area.clear()
-        
-        if "spotify.com" in url or "spotify:" in url:
-            if "playlist" in url:
-                tracks = self.manager.get_spotify_tracks(url)
-            elif "album" in url:
-                tracks = self.manager.get_spotify_album_tracks(url)
-            elif "track" in url:
-                tracks = self.manager.get_spotify_track(url)
-            else:
-                QMessageBox.critical(
-                    self, 
-                    "Error", 
-                    "Unsupported Spotify URL format."
-                )
-                return
-                
-            self.log(f"Transferring from Spotify to Tidal:\nSource URL: {url}\nTidal Playlist: {tidal_playlist_name}")
-            self.transfer_button.setEnabled(False)
-            self.download_button.setEnabled(False)
-            self.download_progress_bar.setValue(0)
-            
-            try:
-                playlist, unmatched, playlist_url = self.manager.create_tidal_playlist(
-                    tidal_playlist_name,
-                    tracks,
-                    output_callback=self.log,
-                    progress_callback=self.update_transfer_progress
-                )
-                
-                self.log("\nSuccess: Tidal playlist created!")
-                self.log(f"Playlist URL: {playlist_url}")
-                self.log(f"Transferred: {len(tracks) - len(unmatched)}/{len(tracks)} tracks")
-                
-                if unmatched:
-                    self.log("\nUnmatched Tracks:")
-                    for track in unmatched:
-                        self.log(f"- {track['name']} by {track['artist']} (Album: {track['album']})")
-                        
-                self.playlist_url = playlist_url
-                self.total_tracks = len(tracks) - len(unmatched)
-                self.download_button.setEnabled(True)
-                
-            except Exception as e:
-                QMessageBox.critical(
-                    self, 
-                    "Error", 
-                    f"Transfer failed: {str(e)}"
-                )
-            finally:
-                self.transfer_button.setEnabled(True)
-                
-        elif "tidal.com" in url:
-            self.log("Tidal URL detected. No conversion needed.")
-            self.playlist_url = url
-            self.download_button.setEnabled(True)
-        else:
-            QMessageBox.critical(
-                self, 
-                "Error", 
-                "URL is neither a valid Spotify nor Tidal link."
-            )
-
-    def start_download(self) -> None:
-        self.set_progress_label("Download Progress")
-        self.download_button.setEnabled(False)
-        self.log("\nStarting download process...")
-        self.download_progress_bar.setMaximum(self.total_tracks)
-        self.download_progress_bar.setValue(0)
-        self.download_progress_bar.setFormat("Downloading: %p% (%v/%m)")
-        self.conversion_progress_bar.setMaximum(100)  # Set to 100 for percentage-based updates
-        self.conversion_progress_bar.setValue(0)
-        self.conversion_progress_bar.setFormat("Converting: %p% (%v/%m)")
-        self.conversion_label.setText("")
-
-        sudo_token = _app_settings.get("sudo_password_encrypted")
-        sudo_pass = decrypt_password(sudo_token) if sudo_token else None
-        if not sudo_pass:
-            sudo_pass = get_or_prompt_sudo_password(self)
-            if not sudo_pass:
-                self.log("❌ Sudo password is required for download and conversion.")
-                self.download_button.setEnabled(True)
-                return
-            _app_settings["sudo_password_encrypted"] = encrypt_password(sudo_pass)
-            config_manager.set("sudo_password_encrypted", encrypt_password(sudo_pass))
-
-        self.download_thread = DownloadThread(
-            self.playlist_url, 
-            self.total_tracks,
-            self.download_folder_input.text()
-        )
-        self.download_thread.sudo_password = sudo_pass
-        self.download_thread.convert_to_mp3 = _app_settings.get("convert_to_mp3_only", False)
-        self.download_thread.update_log.connect(self.log)
-        self.download_thread.update_progress.connect(self.update_download_progress)
-        self.download_thread.update_conversion_progress.connect(self.update_conversion_progress)
-        self.download_thread.finished.connect(self.download_finished)
-        self.download_thread.password_required.connect(self.handle_password_request)
-        self.download_thread.start()
-
-    def update_tidal_config_output(self) -> None:
-        """Update Tidal config with output path."""
-        wsl_home = get_wsl_home()
-        tidal_tmp = f"{wsl_home}/tidal_tmp"
-        config_dir = f"{wsl_home}/.config/tidal_dl_ng"
-        config_path = f"{config_dir}/settings.json"
-        
-        # Create directories if they don't exist
-        subprocess.run(
-            ['wsl', 'bash', '-c', f"mkdir -p {config_dir} && mkdir -p {tidal_tmp}"],
-            check=True
-        )
-        
-        # Get FFmpeg path in WSL
-        ffmpeg_path = _app_settings["tidal_dl_ng_config"].get("path_binary_ffmpeg", "")
-        if not ffmpeg_path:
-            # Try to find FFmpeg
-            result = subprocess.run(
-                ['wsl', 'bash', '-c', 'which ffmpeg'],
-                capture_output=True,
-                text=True
-            )
-            ffmpeg_path = result.stdout.strip() if result.stdout.strip() else "/usr/bin/ffmpeg"
-        
-        # Verify FFmpeg is working
-        verify_cmd = f'wsl bash -c "{ffmpeg_path} -version"'
-        verify_result = subprocess.run(verify_cmd, shell=True, capture_output=True, text=True)
-        if verify_result.returncode != 0:
-            self.log("⚠️ Warning: FFmpeg verification failed. Attempting to reinstall...")
-            if ensure_ffmpeg_installed(None):
-                result = subprocess.run(
-                    ['wsl', 'bash', '-c', 'which ffmpeg'],
-                    capture_output=True,
-                    text=True
-                )
-                ffmpeg_path = result.stdout.strip()
-            else:
-                self.log("⚠️ Warning: Could not verify FFmpeg installation. Some features may be limited.")
-        
-        # Update app settings
-        _app_settings["tidal_dl_ng_config"]["download_base_path"] = tidal_tmp
-        _app_settings["tidal_dl_ng_config"]["path_binary_ffmpeg"] = ffmpeg_path
-        config_manager.save_settings()
-        
-        # Create Tidal config file with all necessary settings
-        tidal_config = {
-            "download_base_path": tidal_tmp,
-            "path_binary_ffmpeg": ffmpeg_path,
-            "skip_existing": True,
-            "lyrics_embed": False,
-            "lyrics_file": False,
-            "video_download": True,
-            "download_delay": True,
-            "quality_audio": "HIGH",
-            "quality_video": "480",
-            "format_album": "Albums/{album_artist} - {album_title}{album_explicit}/{track_volume_num_optional}{album_track_num}",
-            "format_playlist": "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}",
-            "format_mix": "Mix/{mix_name}/{artist_name} - {track_title}",
-            "format_track": "Tracks/{artist_name} - {track_title}{track_explicit}",
-            "format_video": "Videos/{artist_name} - {track_title}{track_explicit}",
-            "video_convert_mp4": True,
-            "metadata_cover_dimension": "320",
-            "metadata_cover_embed": True,
-            "cover_album_file": True,
-            "extract_flac": True,
-            "downloads_simultaneous_per_track_max": 20,
-            "download_delay_sec_min": 3.0,
-            "download_delay_sec_max": 5.0,
-            "album_track_num_pad_min": 1,
-            "downloads_concurrent_max": 3,
-            "symlink_to_track": False
-        }
-        
-        json_str = json.dumps(tidal_config, indent=4).replace('"', '\\"')
-        bash_cmd = f'echo "{json_str}" > {config_path}'
-        subprocess.run(
-            ['wsl', 'bash', '-c', bash_cmd], 
-            check=True
-        )
-        
-        self.log(f"Tidal downloads will go to temp WSL path: {tidal_tmp}")
-        self.log(f"FFmpeg path set to: {ffmpeg_path}")
-        if verify_result.returncode == 0:
-            self.log("FFmpeg verification successful!")
-
-    def apply_theme(self) -> None:
-        """Apply light or dark theme based on settings."""
-        if _app_settings.get("dark_mode", False):
-            self.apply_dark_mode()
-        else:
-            self.apply_light_mode()
-
-    def apply_light_mode(self) -> None:
-        """Apply light mode theme."""
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #f9fafb;
-                color: #222831;
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QLineEdit {
-                background-color: #f7f8fa;
-                color: #222831;
-                border: 1.5px solid #b0b8c1;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QLineEdit:disabled {
-                background-color: #eceef1;
-                color: #a0a4aa;
-            }
-            QLineEdit::placeholder {
-                color: #8a99b3;
-                font-size: 16px;
-            }
-            QPushButton {
-                background-color: #4a90e2;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 12px 28px;
-                font-size: 18px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #357ab8;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-            QProgressBar {
-                border: 2px solid #b0b8c1;
-                border-radius: 10px;
-                background: #f7f8fa;
-                height: 32px;
-                font-weight: bold;
-                font-size: 16px;
-                text-align: center;
-                color: #222831;
-            }
-            QProgressBar::chunk {
-                background-color: #4a90e2;
-                border-radius: 8px;
-            }
-            QTextEdit {
-                background-color: #f7f8fa;
-                border: 1.5px solid #b0b8c1;
-                border-radius: 8px;
-                padding: 10px;
-                color: #222831;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QCheckBox {
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
-                font-weight: 600;
-                spacing: 5px;
-                padding: 7px;
-            }
-            QCheckBox::indicator {
-                width: 22px;
-                height: 22px;
-            }
-            QLabel {
-                font-size: 18px;
-                font-weight: bold;
-            }
-        """)
-
-    def apply_dark_mode(self) -> None:
-        """Apply dark mode theme."""
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #16181c;
-                color: #e0e6ed;
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QLineEdit {
-                background-color: #18191d;
-                color: #e0e6ed;
-                border: 1.5px solid #444a54;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QLineEdit:disabled {
-                background-color: #18191d;
-                color: #6c7380;
-            }
-            QLineEdit::placeholder {
-                color: #7a869a;
-                font-size: 16px;
-            }
-            QPushButton {
-                background-color: #4a90e2;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 12px 28px;
-                font-size: 18px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #357ab8;
-            }
-            QPushButton:disabled {
-                background-color: #444a54;
-            }
-            QProgressBar {
-                border: 2px solid #444a54;
-                border-radius: 10px;
-                background: #18191d;
-                height: 32px;
-                font-weight: bold;
-                font-size: 16px;
-                text-align: center;
-                color: #e0e6ed;
-            }
-            QProgressBar::chunk {
-                background-color: #4a90e2;
-                border-radius: 8px;
-            }
-            QTextEdit {
-                background-color: #18191d;
-                border: 1.5px solid #444a54;
-                border-radius: 8px;
-                padding: 10px;
-                color: #e0e6ed;
-                font-size: 16px;
-                font-weight: 600;
-            }
-            QCheckBox {
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
-                font-weight: 600;
-                spacing: 5px;
-                padding: 7px;
-            }
-            QCheckBox::indicator {
-                width: 22px;
-                height: 22px;
-            }
-            QLabel {
-                font-size: 18px;
-                font-weight: bold;
-            }
-        """)
-
-    def toggle_dark_mode(self, checked: bool) -> None:
-        """Toggle between light and dark mode."""
-        _app_settings["dark_mode"] = checked
-        config_manager.set("dark_mode", checked)
-        
-        if checked:
-            self.apply_dark_mode()
-        else:
-            self.apply_light_mode()
-            
-        # Add fade animation
-        effect = QGraphicsOpacityEffect(self.input_card)
-        self.input_card.setGraphicsEffect(effect)
-        
-        self.anim = QPropertyAnimation(effect, b"opacity")
-        self.anim.setDuration(300)
-        self.anim.setStartValue(0.0)
-        self.anim.setEndValue(1.0)
-        self.anim.finished.connect(
-            lambda: self.input_card.setGraphicsEffect(None)
-        )
-        self.anim.start()
-    
-    def download_finished(self, success: bool) -> None:
-        """Handle download completion."""
-        try:
-            if success:
-                self.log("\n✅ Download completed successfully!")
-                self.download_progress_bar.setValue(self.download_progress_bar.maximum())
-                
-                # Get the WSL temp folder and Windows output folder
-                wsl_home = get_wsl_home()
-                wsl_folder = f"{wsl_home}/tidal_tmp"
-                windows_folder = self.download_folder_input.text().strip()
-                
-                if not windows_folder:
-                    self.log("Error: No output folder specified")
-                    return
-                
-                # Verify WSL folder exists
-                verify_cmd = f'wsl bash -c "if [ -d \\"{wsl_folder}\\" ]; then echo exists; else echo not_found; fi"'
-                result = subprocess.run(verify_cmd, shell=True, capture_output=True, text=True)
-                
-                if "not_found" in result.stdout:
-                    self.log(f"Error: WSL folder not found: {wsl_folder}")
-                    return
-                
-                # Sync files from WSL to Windows
-                self.log("\nSyncing files from WSL to Windows...")
-                if self.download_thread:
-                    try:
-                        self.download_thread.copy_from_wsl_to_windows(wsl_folder, windows_folder)
-                    except Exception as e:
-                        self.log(f"Error during file transfer: {str(e)}")
-                        import traceback
-                        self.log(f"Traceback: {traceback.format_exc()}")
-                        return
-                
-                # Convert to MP3 if needed
-                if _app_settings.get("convert_to_mp3_only", False):
-                    self.log("\nConverting files to MP3...")
-                    try:
-                        self.download_thread.convert_all_to_mp3(windows_folder)
-                    except Exception as e:
-                        self.log(f"Error during MP3 conversion: {str(e)}")
-                        import traceback
-                        self.log(f"Traceback: {traceback.format_exc()}")
-            else:
-                self.log("\n❌ Download failed!")
-                
-        except Exception as e:
-            self.log(f"\n⚠️ Error in download_finished: {str(e)}")
-            import traceback
-            self.log(f"Traceback: {traceback.format_exc()}")
-        finally:
-            try:
-                self.download_button.setEnabled(True)
-                self.log("\nProcess completed.")
-            except Exception as e:
-                self.log(f"Error re-enabling download button: {str(e)}")
-
-    def closeEvent(self, event) -> None:
-        """Handle application close event."""
-        try:
-            # Clean up any running threads
-            if hasattr(self, 'download_thread') and self.download_thread and self.download_thread.isRunning():
-                self.download_thread.terminate()
-                self.download_thread.wait()
-                
-            # Clean up WSL temp directory
-            if platform.system() == "Windows":
-                wsl_home = get_wsl_home()
-                wsl_temp_path = f"{wsl_home}/tidal_tmp"
-                subprocess.run(
-                    ['wsl', 'bash', '-c', f'rm -rf "{wsl_temp_path}"'],
-                    capture_output=True
-                )
-        except Exception as e:
-            log_message("Error during cleanup: %s", e)
-            
-        event.accept()
-
-    def handle_password_request(self) -> None:
-        """Handle password request from download thread."""
-        stored_token = _app_settings.get("sudo_password_encrypted")
-        sudo_pass = decrypt_password(stored_token) if stored_token else None
-        if not sudo_pass:
-            self.log("Error: No stored sudo password found. Please run the application again.")
-            self.download_thread.set_password_verified(False)
-            return
-
-        sudo_pass = get_or_prompt_sudo_password(self)
-        if not sudo_pass:
-            self.log("Error: Sudo password is required for file operations.")
-            self.download_thread.set_password_verified(False)
-            return
-
-        self.download_thread.sudo_password = sudo_pass
-        self.download_thread.set_password_verified(True)
-
-    def set_progress_label(self, text: str):
-        if hasattr(self, 'progress_label'):
-            self.progress_label.setText(text)
-
-    # --- Conversion Progress Bar Realism ---
-    def update_conversion_progress(self, current: int, total: int) -> None:
-        if not hasattr(self, 'conversion_progress_bar'):
-            return
-        self.conversion_progress_bar.setMaximum(total)
-        self.conversion_progress_bar.setValue(current)
-        if hasattr(self, 'conversion_label'):
-            if current < total:
-                self.conversion_label.setText(f"Converting file {current} of {total}...")
-            else:
-                self.conversion_label.setText("Conversion complete!")
-        QApplication.processEvents()
-
-    def update_transfer_progress(self, current: int, total: int) -> None:
-        """Update progress bar for transfer progress."""
-        self.download_progress_bar.setMaximum(total)
-        self.download_progress_bar.setValue(current)
-        QApplication.processEvents()
-
-    def update_download_progress(self, current: int) -> None:
-        """Update progress bar for download progress."""
-        if not hasattr(self, 'total_tracks') or self.total_tracks <= 0:
-            return
-        self.download_progress_bar.setMaximum(self.total_tracks)
-        self.download_progress_bar.setValue(current)
-        QApplication.processEvents()
-
-# --- Encryption helpers ---
-ENCRYPTION_KEY_FILE = os.path.join(os.path.expanduser("~"), ".spotifytotidal_key")
-
-def get_encryption_key() -> Optional[bytes]:
-    if not os.path.exists(ENCRYPTION_KEY_FILE):
-        key = Fernet.generate_key()
-        with open(ENCRYPTION_KEY_FILE, "wb") as f:
-            f.write(key)
-        return key
-    with open(ENCRYPTION_KEY_FILE, "rb") as f:
-        return f.read()
-
-def encrypt_password(password: str) -> str:
-    key = get_encryption_key()
-    f = Fernet(key)
-    return f.encrypt(password.encode()).decode()
-
-def decrypt_password(token: str) -> Optional[str]:
-    try:
-        key = get_encryption_key()
-        f = Fernet(key)
-        return f.decrypt(token.encode()).decode()
-    except Exception:
-        return None
-
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
+    
+    # Check authentication first
+    if not check_authentication():
+        auth_window = AuthSetupWindow()
+        auth_window.show()
+        app.exec_()
+        
+        # Check again after auth window closes
+        if not check_authentication():
+            sys.exit(1)
+    
+    # Launch main application
     window = SpotifyToTidalApp()
     window.show()
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        log_message(f"Application error: {str(e)}", "ERROR")
+        import traceback
+        log_message(f"Traceback: {traceback.format_exc()}", "ERROR")
+        sys.exit(1)

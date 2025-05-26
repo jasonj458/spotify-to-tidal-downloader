@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -23,8 +24,6 @@ wheels/
 # Virtual Environment
 venv/
 ENV/
-env/
-.env/
 
 # IDE
 .idea/
@@ -35,8 +34,14 @@ env/
 # Application specific
 .spotify_token_cache
 tidal_session.pkl
+*.log
+debug.log
+gui.log
 app_settings.json
-output.log
+
+# WSL temporary files
+tidal_tmp/
+
 # Keep other spec files ignored but allow SpotifyToTidal.spec
 *.spec
 !SpotifyToTidal.spec
