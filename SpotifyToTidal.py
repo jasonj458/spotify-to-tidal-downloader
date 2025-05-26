@@ -86,22 +86,22 @@ def check_authentication() -> bool:
     """Check if Tidal authentication is valid."""
     try:
         # Check if settings file exists
-        if not os.path.exists("app_settings.json"):
+        if not os.path.exists(SETTINGS_FILE):
             log_message("Settings file not found", "DEBUG")
             return False
             
         # Load settings
-        with open("app_settings.json", "r") as f:
+        with open(SETTINGS_FILE, "r") as f:
             settings = json.load(f)
             
         # Check Tidal session
-        if not os.path.exists("tidal_session.pkl"):
+        if not os.path.exists(TIDAL_SESSION_FILE):
             log_message("Tidal session file not found", "DEBUG")
             return False
             
         # Verify Tidal session
         try:
-            with open("tidal_session.pkl", "rb") as f:
+            with open(TIDAL_SESSION_FILE, "rb") as f:
                 session = pickle.load(f)
             if not session.check_login():
                 log_message("Tidal session invalid", "DEBUG")

@@ -100,7 +100,24 @@ Note: The application must be built before it can be run. Running the Python scr
 
 If the application crashes or fails to start:
 
-1. **WSL Issues**
+1. **Authentication Issues**
+   - Check if the AppData directory exists:
+     ```powershell
+     dir %LOCALAPPDATA%\SpotifyToTidal
+     ```
+   - If it doesn't exist, create it:
+     ```powershell
+     mkdir %LOCALAPPDATA%\SpotifyToTidal
+     ```
+   - Delete any existing authentication files and try again:
+     ```powershell
+     del %LOCALAPPDATA%\SpotifyToTidal\*.pkl
+     del %LOCALAPPDATA%\SpotifyToTidal\app_settings.json
+     ```
+   - Make sure you have proper permissions to access the AppData directory
+   - Try running the application as administrator
+
+2. **WSL Issues**
    - Verify WSL is installed and running:
      ```powershell
      wsl --status
@@ -114,28 +131,25 @@ If the application crashes or fails to start:
      wsl --shutdown
      wsl --update
      ```
+   - Verify WSL user setup:
+     ```powershell
+     wsl -u root
+     ```
+   - If prompted for a username/password, set them up
+   - Make sure WSL has proper permissions to access Windows files
 
-2. **FFmpeg Issues**
-   - Verify FFmpeg is installed:
+3. **FFmpeg Issues**
+   - Verify FFmpeg is installed in WSL:
      ```powershell
-     ffmpeg -version
+     wsl bash -c "which ffmpeg"
      ```
-   - If not found, ensure FFmpeg is in your system PATH
-   - Try reinstalling FFmpeg and adding it to PATH again
-
-3. **Authentication Issues**
-   - Check if the AppData directory exists:
+   - If not found, install FFmpeg in WSL:
      ```powershell
-     dir %LOCALAPPDATA%\SpotifyToTidal
+     wsl bash -c "sudo apt update && sudo apt install -y ffmpeg"
      ```
-   - If it doesn't exist, create it:
+   - Verify FFmpeg works:
      ```powershell
-     mkdir %LOCALAPPDATA%\SpotifyToTidal
-     ```
-   - Delete any existing authentication files and try again:
-     ```powershell
-     del %LOCALAPPDATA%\SpotifyToTidal\*.pkl
-     del %LOCALAPPDATA%\SpotifyToTidal\app_settings.json
+     wsl bash -c "ffmpeg -version"
      ```
 
 4. **Build Issues**
@@ -156,6 +170,21 @@ If the application crashes or fails to start:
    - Check Windows Event Viewer for application errors
    - Ensure you have administrator privileges
    - Try running the application as administrator
+   - Check if antivirus is blocking the application
+   - Verify Windows Defender settings
+
+6. **Common Error Messages**
+   - "Settings file not found": The application can't find the configuration files in AppData
+   - "Tidal session invalid": The Tidal authentication has expired or is corrupted
+   - "WSL not found": Windows Subsystem for Linux is not properly installed
+   - "FFmpeg not found": FFmpeg is not installed in WSL or not in PATH
+   - "Permission denied": The application doesn't have proper permissions to access files
+
+For additional help or if issues persist, please open an issue on GitHub with:
+1. The exact error message
+2. Steps to reproduce the issue
+3. Your system information (Windows version, WSL version)
+4. Any relevant error logs from Event Viewer
 
 ## Configuration
 
