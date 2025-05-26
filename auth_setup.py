@@ -22,9 +22,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ------------------- Constants -------------------
-SETTINGS_FILE = "app_settings.json"
-TIDAL_SESSION_FILE = "tidal_session.pkl"
-SPOTIFY_TOKEN_CACHE = ".spotify_token_cache"
+# Get the path to the user's home directory
+home_dir = os.path.expanduser('~')
+app_data_dir = os.path.join(home_dir, 'AppData', 'Local', 'SpotifyToTidal')
+os.makedirs(app_data_dir, exist_ok=True)
+
+# Update file paths
+SETTINGS_FILE = os.path.join(app_data_dir, 'app_settings.json')
+TIDAL_SESSION_FILE = os.path.join(app_data_dir, 'tidal_session.pkl')
+SPOTIFY_TOKEN_CACHE = os.path.join(app_data_dir, '.spotify_token_cache')
 
 class AuthSetupWindow(QWidget):
     def __init__(self):

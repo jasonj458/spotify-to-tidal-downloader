@@ -1199,7 +1199,16 @@ if not _app_settings["tidal_dl_ng_config"].get("download_base_path"):
     _app_settings["tidal_dl_ng_config"]["download_base_path"] = default_download
     config_manager.save_settings()
 
-TIDAL_SESSION_FILE: str = _app_settings.get("tidal_session_file", "tidal_session.pkl")
+# Get the path to the user's home directory
+home_dir = os.path.expanduser('~')
+app_data_dir = os.path.join(home_dir, 'AppData', 'Local', 'SpotifyToTidal')
+os.makedirs(app_data_dir, exist_ok=True)
+
+# Update file paths
+SPOTIFY_TOKEN_CACHE = os.path.join(app_data_dir, '.spotify_token_cache')
+TIDAL_SESSION_FILE = os.path.join(app_data_dir, 'tidal_session.pkl')
+SETTINGS_FILE = os.path.join(app_data_dir, 'app_settings.json')
+
 SIMILARITY_THRESHOLD: int = _app_settings.get("similarity_threshold", 70)
 
 # ------------------- Spotify API Initialization -------------------
@@ -1272,7 +1281,7 @@ class SpotifyAuthManager:
             client_secret=_app_settings["spotify_config"]["client_secret"],
             redirect_uri=_app_settings["spotify_config"]["redirect_uri"],
             scope=scope,
-            cache_path=".spotify_token_cache"
+            cache_path=SPOTIFY_TOKEN_CACHE
         )
         
     def get_spotify_client(self):
