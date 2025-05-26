@@ -41,17 +41,24 @@ pip install -r requirements.txt
    - Log in to your Tidal account
    - The application will handle the authentication process
 
+5. Build the application:
+```bash
+pyinstaller --onefile --windowed --icon=logo.ico SpotifyToTidal.py
+```
+   The executable will be created in the `dist` directory.
+
 ## Usage
 
-1. Run the application:
-```bash
-python SpotifyToTidal.py
-```
+1. Navigate to the `dist` directory and run the executable:
+   - Windows: Double-click `SpotifyToTidal.exe`
+   - Or run from command line: `./SpotifyToTidal.exe`
 
 2. Authenticate with Spotify and Tidal when prompted
 3. Enter the Spotify playlist URL
 4. Select the destination folder for downloads
 5. Wait for the transfer and conversion process to complete
+
+Note: The application must be built before it can be run. Running the Python script directly is not supported.
 
 ## Configuration
 
@@ -64,6 +71,8 @@ To create an executable:
 ```bash
 pyinstaller --onefile --windowed --icon=logo.ico SpotifyToTidal.py
 ```
+
+The executable will be created in the `dist` directory. This is the recommended way to run the application.
 
 ## License
 
