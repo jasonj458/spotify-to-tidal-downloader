@@ -19,6 +19,38 @@ A Python application that allows users to transfer playlists from Spotify to Tid
 - Spotify Developer account
 - Tidal account
 
+### System Requirements
+
+1. **Windows 10 or later**
+   - Must be a 64-bit system
+   - Windows Subsystem for Linux (WSL) must be installed and configured
+
+2. **WSL Setup**
+   - Install WSL by running in PowerShell as Administrator:
+     ```powershell
+     wsl --install
+     ```
+   - After installation, restart your computer
+   - Set up a Linux username and password when prompted
+   - Verify WSL is working by running:
+     ```powershell
+     wsl --status
+     ```
+
+3. **FFmpeg Installation**
+   - Download FFmpeg from https://ffmpeg.org/download.html
+   - Extract the downloaded files
+   - Add FFmpeg's bin directory to your system PATH:
+     1. Open System Properties > Advanced > Environment Variables
+     2. Under System Variables, find and select "Path"
+     3. Click Edit > New
+     4. Add the path to FFmpeg's bin directory (e.g., `C:\ffmpeg\bin`)
+     5. Click OK to save
+   - Verify installation by running:
+     ```powershell
+     ffmpeg -version
+     ```
+
 ## Installation
 
 1. Clone the repository:
@@ -64,29 +96,66 @@ python build.py
 
 Note: The application must be built before it can be run. Running the Python script directly is not supported.
 
-## Important Notes
+## Troubleshooting
 
-1. **Building Requirements**:
-   - Always use `build.py` to create the executable
-   - The build script ensures all dependencies are properly included
-   - Running the executable on other PCs requires the same build process
+If the application crashes or fails to start:
 
-2. **System Requirements**:
-   - Windows 10 or later
-   - WSL (Windows Subsystem for Linux) installed and configured
-   - FFmpeg installed and available in system PATH
-   - Internet connection for Spotify and Tidal authentication
+1. **WSL Issues**
+   - Verify WSL is installed and running:
+     ```powershell
+     wsl --status
+     ```
+   - If WSL is not installed, run:
+     ```powershell
+     wsl --install
+     ```
+   - If WSL is installed but not working, try:
+     ```powershell
+     wsl --shutdown
+     wsl --update
+     ```
 
-3. **First Run**:
-   - The application will create necessary directories in your AppData folder
-   - You'll need to authenticate with both Spotify and Tidal
-   - You'll need to provide your WSL sudo password for file operations
+2. **FFmpeg Issues**
+   - Verify FFmpeg is installed:
+     ```powershell
+     ffmpeg -version
+     ```
+   - If not found, ensure FFmpeg is in your system PATH
+   - Try reinstalling FFmpeg and adding it to PATH again
 
-4. **Troubleshooting**:
-   - If the application crashes on other PCs, ensure all system requirements are met
-   - Verify WSL is properly installed and configured
-   - Check that FFmpeg is installed and accessible in the system PATH
-   - Ensure all authentication files are properly created in the AppData folder
+3. **Authentication Issues**
+   - Check if the AppData directory exists:
+     ```powershell
+     dir %LOCALAPPDATA%\SpotifyToTidal
+     ```
+   - If it doesn't exist, create it:
+     ```powershell
+     mkdir %LOCALAPPDATA%\SpotifyToTidal
+     ```
+   - Delete any existing authentication files and try again:
+     ```powershell
+     del %LOCALAPPDATA%\SpotifyToTidal\*.pkl
+     del %LOCALAPPDATA%\SpotifyToTidal\app_settings.json
+     ```
+
+4. **Build Issues**
+   - Ensure all required files are present:
+     - SpotifyToTidal.py
+     - requirements.txt
+     - SpotifyToTidal.spec
+     - logo.png
+     - mp3icon.png
+     - sun.png
+     - moon.png
+   - Try rebuilding with:
+     ```bash
+     python build.py
+     ```
+
+5. **Runtime Issues**
+   - Check Windows Event Viewer for application errors
+   - Ensure you have administrator privileges
+   - Try running the application as administrator
 
 ## Configuration
 
