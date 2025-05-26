@@ -37,14 +37,15 @@ env/
 tidal_session.pkl
 app_settings.json
 output.log
+# Keep other spec files ignored but allow SpotifyToTidal.spec
 *.spec
+!SpotifyToTidal.spec
 C*Usersjkarasudo_test.txt
 
 # Build artifacts
 dist/
 build/
 *.exe
-*.spec
 
 # Logs
 *.log 
