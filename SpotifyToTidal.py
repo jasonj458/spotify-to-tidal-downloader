@@ -136,8 +136,10 @@ class ConfigManager:
 
 default_settings = {
     "spotify_config": {
-        "client_id": "8aabf4f34b5341018d5d5e957110bc79",
-        "client_secret": "90bb16710f8e46a39f3ee972672f5ec6",
+        # Replace these with your own Spotify API credentials
+        # Get them from https://developer.spotify.com/dashboard
+        "client_id": "YOUR_SPOTIFY_CLIENT_ID",
+        "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET",
         "redirect_uri": "http://localhost:8888/callback"
     },
     "tidal_dl_ng_config": {
