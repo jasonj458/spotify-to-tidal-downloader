@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Application specific
+.spotify_token_cache
+tidal_session.pkl
+app_settings.json
+output.log
+*.spec
+C*Usersjkarasudo_test.txt
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.spec
+
+# Logs
+*.log 
