@@ -46,6 +46,8 @@ def build_executable():
             os.remove("runtime_hook.py")
             
         # Run PyInstaller
+        # Find the PyInstaller command and ensure it does NOT use --noconsole, and instead uses --console if present.
+        # Example: pyinstaller --onefile --console SpotifyToTidal.py
         subprocess.run([sys.executable, "-m", "PyInstaller", "SpotifyToTidal.spec"], check=True)
         
         # Verify the executable was created

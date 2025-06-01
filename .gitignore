@@ -53,4 +53,27 @@ build/
 *.exe
 
 # Logs
-*.log 
+*.log
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# User-specific config and secrets
+app_settings.json
+tidal_session.pkl
+.spotify_token_cache
+output.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test and temp files
+CUsersjkarasudo_test.txt 

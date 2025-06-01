@@ -9,13 +9,14 @@ from typing import Optional, Dict, Any, Tuple
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, 
                             QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox,
-                            QTabWidget, QFrame, QCheckBox)
+                            QTabWidget, QFrame, QCheckBox, QDialog)
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QFont, QIcon
 
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import tidalapi
+from tidal_login_dialog import TidalLoginDialog
 
 # ------------------- Logging Setup -------------------
 logging.basicConfig(level=logging.INFO)
@@ -32,13 +33,24 @@ SETTINGS_FILE = os.path.join(app_data_dir, 'app_settings.json')
 TIDAL_SESSION_FILE = os.path.join(app_data_dir, 'tidal_session.pkl')
 SPOTIFY_TOKEN_CACHE = os.path.join(app_data_dir, '.spotify_token_cache')
 
-class AuthSetupWindow(QWidget):
+class AuthSetupWindow(QDialog):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Authentication Setup")
         self.setMinimumSize(600, 400)
         self.spotify_authenticated = False
         self.tidal_authenticated = False
+        
+        # Ensure AppData directory exists
+        home_dir = os.path.expanduser('~')
+        self.app_data_dir = os.path.join(home_dir, 'AppData', 'Local', 'SpotifyToTidal')
+        os.makedirs(self.app_data_dir, exist_ok=True)
+        
+        # Update file paths
+        self.settings_file = os.path.join(self.app_data_dir, 'app_settings.json')
+        self.tidal_session_file = os.path.join(self.app_data_dir, 'tidal_session.pkl')
+        self.spotify_token_cache = os.path.join(self.app_data_dir, '.spotify_token_cache')
+        
         self.setup_ui()
         self.load_settings()
         self.check_auth_status()
@@ -113,8 +125,8 @@ class AuthSetupWindow(QWidget):
 
     def load_settings(self):
         try:
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r') as f:
                     settings = json.load(f)
                     if 'spotify_config' in settings:
                         self.spotify_client_id.setText(settings['spotify_config'].get('client_id', ''))
@@ -124,35 +136,55 @@ class AuthSetupWindow(QWidget):
 
     def save_settings(self):
         try:
-            settings = {}
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
+            # Log the path and values
+            with open("auth_debug.log", "a") as logf:
+                logf.write(f"Saving to: {self.settings_file}\n")
+                logf.write(f"Client ID: {self.spotify_client_id.text()}\n")
+                logf.write(f"Client Secret: {self.spotify_client_secret.text()}\n")
+
+            # Load the full settings file
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r') as f:
                     settings = json.load(f)
-            
+            else:
+                settings = {}
+
+            # Update only the spotify_config section
             if 'spotify_config' not in settings:
                 settings['spotify_config'] = {}
-            
+
             settings['spotify_config']['client_id'] = self.spotify_client_id.text()
             settings['spotify_config']['client_secret'] = self.spotify_client_secret.text()
             settings['spotify_config']['redirect_uri'] = "http://localhost:8888/callback"
-            
-            with open(SETTINGS_FILE, 'w') as f:
+
+            # Write the full settings back
+            with open(self.settings_file, 'w') as f:
                 json.dump(settings, f, indent=4)
-            
+
+            with open("auth_debug.log", "a") as logf:
+                logf.write("Save successful!\n")
+
+            msg = f"Settings saved to: {self.settings_file}\n\nClient ID: {self.spotify_client_id.text()}\nClient Secret: {self.spotify_client_secret.text()}"
+            print("[DEBUG] " + msg.replace("\n", " "))
+            QMessageBox.information(self, "Settings Saved", msg)
             return True
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
+            with open("auth_debug.log", "a") as logf:
+                logf.write(f"Save failed: {e}\n")
+            print(f"[ERROR] Failed to save Spotify credentials: {e}")
+            QMessageBox.critical(self, "Save Error", f"Failed to save Spotify credentials: {e}")
             return False
 
     def check_auth_status(self):
         # Check Spotify
         try:
-            if os.path.exists(SPOTIFY_TOKEN_CACHE):
+            if os.path.exists(self.spotify_token_cache):
                 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
                     client_id=self.spotify_client_id.text(),
                     client_secret=self.spotify_client_secret.text(),
                     redirect_uri="http://localhost:8888/callback",
-                    cache_path=SPOTIFY_TOKEN_CACHE
+                    cache_path=self.spotify_token_cache
                 ))
                 sp.current_user()
                 self.spotify_status.setText("Status: Authenticated")
@@ -169,8 +201,8 @@ class AuthSetupWindow(QWidget):
         
         # Check Tidal
         try:
-            if os.path.exists(TIDAL_SESSION_FILE):
-                with open(TIDAL_SESSION_FILE, 'rb') as f:
+            if os.path.exists(self.tidal_session_file):
+                with open(self.tidal_session_file, 'rb') as f:
                     session = pickle.load(f)
                 if session.check_login():
                     self.tidal_status.setText("Status: Authenticated")
@@ -190,6 +222,8 @@ class AuthSetupWindow(QWidget):
     def update_save_button(self):
         """Update save button state based on authentication status."""
         self.save_btn.setEnabled(self.spotify_authenticated and self.tidal_authenticated)
+        if self.spotify_authenticated and self.tidal_authenticated:
+            self.save_and_continue()
 
     def test_spotify_connection(self):
         try:
@@ -201,7 +235,7 @@ class AuthSetupWindow(QWidget):
                 client_id=self.spotify_client_id.text(),
                 client_secret=self.spotify_client_secret.text(),
                 redirect_uri="http://localhost:8888/callback",
-                cache_path=SPOTIFY_TOKEN_CACHE
+                cache_path=self.spotify_token_cache
             ))
             
             user = sp.current_user()
@@ -222,24 +256,16 @@ class AuthSetupWindow(QWidget):
         try:
             session = tidalapi.Session()
             login, future = session.login_oauth()
+            login_url = login.verification_uri_complete
             
-            # Create a dialog to show the login URL
-            dialog = QMessageBox(self)
-            dialog.setWindowTitle("Tidal Login")
-            dialog.setText("Please follow these steps:")
-            dialog.setInformativeText(
-                "1. Click the link below to open Tidal in your browser\n"
-                "2. Log in to your Tidal account\n"
-                "3. After logging in, return to this window and click OK"
-            )
-            dialog.setDetailedText(login.verification_uri_complete)
-            dialog.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-            
-            if dialog.exec_() == QMessageBox.Ok:
+            # Create and show the login dialog
+            dlg = TidalLoginDialog(login_url, self)
+            if dlg.exec_() == QDialog.Accepted:
                 try:
-                    future.result()  # Wait for login to complete
+                    future.result()
                     if session.check_login():
-                        with open(TIDAL_SESSION_FILE, 'wb') as f:
+                        # Save session to AppData directory
+                        with open(self.tidal_session_file, 'wb') as f:
                             pickle.dump(session, f)
                         
                         self.tidal_status.setText("Status: Authenticated")

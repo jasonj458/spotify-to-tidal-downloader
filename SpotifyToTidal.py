@@ -37,6 +37,55 @@ from rapidfuzz import fuzz
 # Import the auth setup window
 from auth_setup import AuthSetupWindow
 
+# Import the TidalLoginDialog from tidal_login_dialog.py
+from tidal_login_dialog import TidalLoginDialog
+
+# ------------------- Default Settings -------------------
+SIMILARITY_THRESHOLD = 80  # Fuzzy match threshold for track matchings
+
+default_settings = {
+    "spotify_config": {
+        "client_id": "YOUR_SPOTIFY_CLIENT_ID",
+        "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET",
+        "redirect_uri": "http://localhost:8888/callback"
+    },
+    "tidal_dl_ng_config": {
+        "skip_existing": True,
+        "lyrics_embed": False,
+        "lyrics_file": False,
+        "video_download": True,
+        "download_delay": True,
+        "download_base_path": "",
+        "quality_audio": "HIGH",
+        "quality_video": "480",
+        "format_album": "Albums/{album_artist} - {album_title}{album_explicit}/{track_volume_num_optional}{album_track_num}",
+        "format_playlist": "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}",
+        "format_mix": "Mix/{mix_name}/{artist_name} - {track_title}",
+        "format_track": "Tracks/{artist_name} - {track_title}{track_explicit}",
+        "format_video": "Videos/{artist_name} - {track_title}{track_explicit}",
+        "video_convert_mp4": True,
+        "metadata_cover_dimension": "320",
+        "metadata_cover_embed": True,
+        "cover_album_file": True,
+        "extract_flac": True,
+        "downloads_simultaneous_per_track_max": 20,
+        "download_delay_sec_min": 3.0,
+        "download_delay_sec_max": 5.0,
+        "album_track_num_pad_min": 1,
+        "downloads_concurrent_max": 3,
+        "symlink_to_track": False,
+        "path_binary_ffmpeg": ""
+    },
+    "ui": {
+        "window_icon": "logo.png",
+        "toggle_unchecked_icon": "toggle_unchecked.png",
+        "toggle_checked_icon": "toggle_checked.png"
+    },
+    "convert_to_mp3_only": False,
+    "dark_mode": False,
+    "download_folder": ""
+}
+
 # ------------------- Logging Setup -------------------
 # Create separate loggers for GUI and debug logs
 gui_logger = logging.getLogger('gui')
@@ -129,14 +178,32 @@ class SpotifyToTidalApp(QWidget):
         self.setup_ui()
         self.apply_theme()
         
-        # Initialize transfer manager with debug_logger
-        self.manager = TransferManager(debug_logger)
+        # Load Spotify credentials from config
+        spotify_config = _app_settings.get("spotify_config", {})
+        client_id = spotify_config.get("client_id")
+        client_secret = spotify_config.get("client_secret")
+        redirect_uri = spotify_config.get("redirect_uri")
+        if not client_id or not client_secret or not redirect_uri or client_id == "YOUR_SPOTIFY_CLIENT_ID" or client_secret == "YOUR_SPOTIFY_CLIENT_SECRET":
+            QMessageBox.critical(
+                self,
+                "Spotify Credentials Missing",
+                "Spotify credentials are missing or invalid. Please restart the app and complete authentication."
+            )
+            sys.exit(1)
+        # Initialize Spotify client using saved credentials
+        self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            cache_path=SPOTIFY_TOKEN_CACHE
+        ))
+        # Now initialize transfer manager with debug_logger
+        self.manager = TransferManager(debug_logger, self.sp, self)
         
         # Initialize Spotify client
         try:
             spotify_auth = SpotifyAuthManager(self)
-            global sp
-            sp = spotify_auth.get_spotify_client()
+            self.sp = spotify_auth.get_spotify_client()
         except Exception as e:
             QMessageBox.critical(
                 self, 
@@ -437,7 +504,7 @@ class SpotifyToTidalApp(QWidget):
         if folder:
             self.download_folder_input.setText(folder)
             _app_settings["tidal_dl_ng_config"]["download_base_path"] = folder
-            config_manager.save_settings()
+            config_manager.set("tidal_dl_ng_config", _app_settings["tidal_dl_ng_config"])
             self.log(f"✅ Output folder set and saved: {folder}")
 
     def log(self, message: str) -> None:
@@ -611,6 +678,25 @@ class SpotifyToTidalApp(QWidget):
         self.conversion_progress_bar.setFormat("Converting: %p% (%v/%m)")
         self.conversion_label.setText("")
 
+        # --- FAKE PROGRESS BAR ---
+        import threading
+        import random
+        self._fake_progress_running = True
+        def fake_progress():
+            value = 0
+            while self._fake_progress_running and value < self.total_tracks:
+                value += 1
+                self.download_progress_bar.setValue(value)
+                QApplication.processEvents()
+                # Simulate variable download speed
+                threading.Event().wait(random.uniform(0.1, 0.3))
+            # Ensure bar is full at the end
+            self.download_progress_bar.setValue(self.total_tracks)
+            QApplication.processEvents()
+        self._fake_progress_thread = threading.Thread(target=fake_progress, daemon=True)
+        self._fake_progress_thread.start()
+        # --- END FAKE PROGRESS BAR ---
+
         sudo_token = _app_settings.get("sudo_password_encrypted")
         sudo_pass = decrypt_password(sudo_token) if sudo_token else None
         if not sudo_pass:
@@ -632,9 +718,15 @@ class SpotifyToTidalApp(QWidget):
         self.download_thread.update_log.connect(self.log)
         self.download_thread.update_progress.connect(self.update_download_progress)
         self.download_thread.update_conversion_progress.connect(self.update_conversion_progress)
-        self.download_thread.finished.connect(self.download_finished)
+        self.download_thread.finished.connect(self._fake_progress_finished)
         self.download_thread.password_required.connect(self.handle_password_request)
         self.download_thread.start()
+
+    def _fake_progress_finished(self, success: bool):
+        self._fake_progress_running = False
+        if hasattr(self, '_fake_progress_thread') and self._fake_progress_thread.is_alive():
+            self._fake_progress_thread.join(timeout=0.5)
+        self.download_finished(success)
 
     def update_tidal_config_output(self) -> None:
         """Update Tidal config with output path."""
@@ -1069,7 +1161,14 @@ def decrypt_password(token: str) -> Optional[str]:
         return None
 
 # ------------------- Config Management -------------------
-SETTINGS_FILE = os.getenv("APP_SETTINGS_FILE", "app_settings.json")
+# Always use AppData for config
+home_dir = os.path.expanduser('~')
+app_data_dir = os.path.join(home_dir, 'AppData', 'Local', 'SpotifyToTidal')
+os.makedirs(app_data_dir, exist_ok=True)
+
+SPOTIFY_TOKEN_CACHE = os.path.join(app_data_dir, '.spotify_token_cache')
+TIDAL_SESSION_FILE = os.path.join(app_data_dir, 'tidal_session.pkl')
+SETTINGS_FILE = os.path.join(app_data_dir, 'app_settings.json')
 
 class ConfigManager:
     """Handles configuration loading, merging with defaults, and saving."""
@@ -1085,7 +1184,7 @@ class ConfigManager:
                 with open(self.filename, "r") as f:
                     return json.load(f)
             except Exception as e:
-                log_message("Error loading settings: %s", e)
+                log_message(f"Error loading settings: {e}", "ERROR")
                 return {}
         return {}
 
@@ -1114,7 +1213,7 @@ class ConfigManager:
             with open(self.filename, "w") as f:
                 json.dump(self.settings, f, indent=4)
         except Exception as e:
-            log_message("Error saving settings: %s", e)
+            log_message(f"Error saving settings: {e}", "ERROR")
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.settings.get(key, default)
@@ -1122,94 +1221,6 @@ class ConfigManager:
     def set(self, key: str, value: Any) -> None:
         self.settings[key] = value
         self.save_settings()
-
-default_settings = {
-    "spotify_config": {
-        # Replace these with your own Spotify API credentials
-        # Get them from https://developer.spotify.com/dashboard
-        "client_id": "YOUR_SPOTIFY_CLIENT_ID",
-        "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET",
-        "redirect_uri": "http://localhost:8888/callback"
-    },
-    "tidal_dl_ng_config": {
-        "skip_existing": True,
-        "lyrics_embed": False,
-        "lyrics_file": False,
-        "video_download": True,
-        "download_delay": True,
-        "download_base_path": "",
-        "quality_audio": "HIGH",
-        "quality_video": "480",
-        "format_album": "Albums/{album_artist} - {album_title}{album_explicit}/{track_volume_num_optional}{album_track_num}",
-        "format_playlist": "Playlists/{playlist_name}/{list_pos}. {artist_name} - {track_title}",
-        "format_mix": "Mix/{mix_name}/{artist_name} - {track_title}",
-        "format_track": "Tracks/{artist_name} - {track_title}{track_explicit}",
-        "format_video": "Videos/{artist_name} - {track_title}{track_explicit}",
-        "video_convert_mp4": True,
-        "path_binary_ffmpeg": "",
-        "metadata_cover_dimension": "320",
-        "metadata_cover_embed": True,
-        "cover_album_file": True,
-        "extract_flac": True,
-        "downloads_simultaneous_per_track_max": 20,
-        "download_delay_sec_min": 3.0,
-        "download_delay_sec_max": 5.0,
-        "album_track_num_pad_min": 1,
-        "downloads_concurrent_max": 3,
-        "symlink_to_track": False
-    },
-    "tidal_session_file": "tidal_session.pkl",
-    "similarity_threshold": 70,
-    "dark_mode": False,
-    "convert_to_mp3_only": False,
-    "ui": {
-        "light_background": "#FFFFFF",
-        "light_surface": "#FFFFFF",
-        "light_border_color": "#E0E0E0",
-        "light_text": "rgba(0,0,0,0.87)",
-        "dark_background": "#1C1B1F",
-        "dark_surface": "#1C1B1F",
-        "dark_border_color": "#3F3A46",
-        "dark_text": "rgba(255,255,255,0.87)",
-        "primary_color": "#6750A4",
-        "primary_variant": "#625B71",
-        "secondary_color": "#03DAC6",
-        "border_radius": "12px",
-        "toggle_unchecked_icon": "sun.png",
-        "toggle_checked_icon": "moon.png",
-        "window_icon": "logo.png",
-        "scrollbar_width": "8px",
-        "scrollbar_light_handle": "#BDBDBD",
-        "scrollbar_light_handle_hover": "#9E9E9E",
-        "scrollbar_dark_handle": "#444444",
-        "scrollbar_dark_handle_hover": "#666666"
-    }
-}
-
-config_manager = ConfigManager(defaults=default_settings)
-_app_settings = config_manager.settings
-
-# Set default download path if not configured
-if not _app_settings["tidal_dl_ng_config"].get("download_base_path"):
-    default_download = os.path.join(
-        os.environ.get("USERPROFILE") or os.environ.get("HOME"), 
-        "Downloads", 
-        "Playlists"
-    )
-    _app_settings["tidal_dl_ng_config"]["download_base_path"] = default_download
-    config_manager.save_settings()
-
-# Get the path to the user's home directory
-home_dir = os.path.expanduser('~')
-app_data_dir = os.path.join(home_dir, 'AppData', 'Local', 'SpotifyToTidal')
-os.makedirs(app_data_dir, exist_ok=True)
-
-# Update file paths
-SPOTIFY_TOKEN_CACHE = os.path.join(app_data_dir, '.spotify_token_cache')
-TIDAL_SESSION_FILE = os.path.join(app_data_dir, 'tidal_session.pkl')
-SETTINGS_FILE = os.path.join(app_data_dir, 'app_settings.json')
-
-SIMILARITY_THRESHOLD: int = _app_settings.get("similarity_threshold", 70)
 
 # ------------------- Spotify API Initialization -------------------
 scope = "playlist-read-private"
@@ -1352,17 +1363,6 @@ def get_wsl_home() -> str:
     except Exception as e:
         log_message("Error getting WSL home: %s", e)
         return "/home/unknown"
-
-@staticmethod
-def convert_windows_to_wsl_path(win_path: str) -> str:
-    """Convert Windows path to WSL path reliably"""
-    win_path = win_path.replace("\\", "/")
-    if win_path.startswith("\\\\"):
-        return win_path  # UNC path, leave as-is
-    if ":" in win_path:
-        drive, path = win_path.split(":", 1)
-        return f"/mnt/{drive.lower()}{path}"
-    return win_path
 
 def convert_wsl_to_windows_path(wsl_path: str) -> str:
     """Convert WSL path to Windows path."""
@@ -1736,9 +1736,11 @@ class TidalLoginDialog(QDialog):
 # ------------------- Transfer Manager -------------------
 class TransferManager:
     """Handles transfer between Spotify and Tidal."""
-    def __init__(self, logger: logging.Logger) -> None:
+    def __init__(self, logger: logging.Logger, sp_client, parent=None) -> None:
         self.logger = logger
         self.session: Optional[tidalapi.Session] = None
+        self.sp = sp_client
+        self.parent = parent
 
     def login_tidal(self) -> tidalapi.Session:
         """Login to Tidal with OAuth."""
@@ -1766,12 +1768,15 @@ class TransferManager:
                 self.logger.error("Error loading Tidal session: %s", e)
                 
         session = tidalapi.Session()
-        login_url = session.login_oauth_simple()
+        login, future = session.login_oauth()
+        login_url = login.verification_uri_complete
         
         # Create and show the login dialog
         dlg = TidalLoginDialog(login_url, self.parent)
         if dlg.exec_() == QDialog.Accepted:
             try:
+                # Wait for the login to complete
+                future.result()
                 if session.check_login():
                     with open(TIDAL_SESSION_FILE, "wb") as f:
                         pickle.dump(session, f)
@@ -1794,7 +1799,7 @@ class TransferManager:
         limit = 100
         
         while True:
-            results = sp.playlist_tracks(
+            results = self.sp.playlist_tracks(
                 playlist_id, 
                 offset=offset, 
                 limit=limit,
@@ -1821,8 +1826,8 @@ class TransferManager:
     def get_spotify_album_tracks(self, album_url: str) -> List[Dict[str, str]]:
         """Get tracks from Spotify album."""
         album_id = extract_album_id(album_url)
-        album = sp.album(album_id)
-        results = sp.album_tracks(album_id)
+        album = self.sp.album(album_id)
+        results = self.sp.album_tracks(album_id)
         
         tracks: List[Dict[str, str]] = []
         for item in results.get('items', []):
@@ -1838,7 +1843,7 @@ class TransferManager:
     def get_spotify_track(self, track_url: str) -> List[Dict[str, str]]:
         """Get single track from Spotify."""
         track_id = extract_track_id(track_url)
-        track = sp.track(track_id)
+        track = self.sp.track(track_id)
         return [{
             'name': track.get('name', ''),
             'artist': track['artists'][0].get('name', ''),
@@ -1952,6 +1957,7 @@ class DownloadThread(QThread):
         self.convert_to_mp3 = _app_settings.get("convert_to_mp3_only", False)
         self.sudo_password = None
         self._password_verified = False
+        self._stop_requested = False
 
     def run(self) -> None:
         """Execute the download process."""
@@ -1999,6 +2005,10 @@ class DownloadThread(QThread):
             current_track = 0
             buffer = ""
             for char in iter(lambda: process.stdout.read(1), ''):
+                if self._stop_requested:
+                    process.terminate()
+                    self.finished.emit(False)
+                    return
                 if char:
                     buffer += char
                     if char in ['\n', '\r']:
@@ -2177,7 +2187,11 @@ class DownloadThread(QThread):
                 if result.returncode == 0:
                     # Remove original file after conversion
                     try:
-                        os.remove(file)
+                        if re.match(r"^[a-zA-Z]:", file):
+                            os.remove(file)
+                        else:
+                            rm_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "rm \'{wsl_input}\'"'
+                            subprocess.run(rm_cmd, shell=True, check=True)
                         self.update_log.emit(f"[DEBUG] Removed original file: {file}")
                     except Exception as e:
                         self.update_log.emit(f"Warning: Could not remove original file {file}: {e}")
@@ -2199,8 +2213,8 @@ class DownloadThread(QThread):
         win_path = win_path.replace("\\", "/")
         if win_path.startswith("\\\\"):
             return win_path  # UNC path, leave as-is
-        if ":" in win_path:
-            drive, path = win_path.split(":", 1)
+        if re.match(r"^[a-zA-Z]:", win_path):
+            drive, path = win_path[0], win_path[2:]
             return f"/mnt/{drive.lower()}{path}"
         return win_path
 
@@ -2208,22 +2222,42 @@ class DownloadThread(QThread):
         """Set password verification status."""
         self._password_verified = verified
 
+    def stop(self):
+        self._stop_requested = True
+
 def main():
+    print('DEBUG: Entered main()')
     app = QApplication(sys.argv)
-    
-    # Check authentication first
-    if not check_authentication():
-        auth_window = AuthSetupWindow()
-        auth_window.show()
-        app.exec_()
-        
-        # Only check Tidal session after auth window closes
-        if not os.path.exists("tidal_session.pkl"):
-            sys.exit(1)
-    
-    # Launch main application
+
+    while True:
+        print('DEBUG: Top of auth loop')
+        with open(SETTINGS_FILE, "r") as f:
+            settings = json.load(f)
+        spotify_config = settings.get("spotify_config", {})
+        client_id = spotify_config.get("client_id")
+        client_secret = spotify_config.get("client_secret")
+        redirect_uri = spotify_config.get("redirect_uri")
+        spotify_valid = bool(client_id and client_secret and redirect_uri and client_id != "YOUR_SPOTIFY_CLIENT_ID" and client_secret != "YOUR_SPOTIFY_CLIENT_SECRET")
+        tidal_valid = check_authentication()
+        print(f'DEBUG: spotify_valid={spotify_valid}, tidal_valid={tidal_valid}')
+        if not (spotify_valid and tidal_valid):
+            print('DEBUG: Launching AuthSetupWindow')
+            auth_window = AuthSetupWindow()
+            auth_window.exec_()
+        else:
+            print('DEBUG: Auth complete, breaking loop')
+            break
+
+    # RELOAD settings for the main window using ConfigManager to merge defaults
+    global _app_settings, config_manager
+    print('DEBUG: Initializing ConfigManager')
+    config_manager = ConfigManager(defaults=default_settings)
+    _app_settings = config_manager.settings
+
+    print('DEBUG: Creating main window')
     window = SpotifyToTidalApp()
     window.show()
+    print('DEBUG: Entering app.exec_()')
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
@@ -2234,3 +2268,5 @@ if __name__ == "__main__":
         import traceback
         log_message(f"Traceback: {traceback.format_exc()}", "ERROR")
         sys.exit(1)
+
+SIMILARITY_THRESHOLD = 80  # Fuzzy match threshold for track matchings

@@ -1,13 +1,13 @@
-# Spotify to Tidal Transfer Tool
+# Spotify to Tidal Transfer & Downloader
 
-A Python application that allows users to transfer playlists from Spotify to Tidal, with the ability to download and convert songs to MP3 format.
+A modern desktop application for transferring and downloading music from Spotify to Tidal, with a GUI, authentication management, and MP3 conversion support.
 
 ## Features
 
 - Transfer playlists from Spotify to Tidal
 - Download songs from Tidal
 - Convert downloaded songs to MP3 format
-- Modern GUI interface
+- Modern GUI interface (PyQt5)
 - Authentication management for both Spotify and Tidal
 - Progress tracking and error handling
 
@@ -55,8 +55,8 @@ A Python application that allows users to transfer playlists from Spotify to Tid
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/spotify-to-tidal.git
-cd spotify-to-tidal
+git clone https://github.com/yourusername/spotify-to-tidal-downloader.git
+cd spotify-to-tidal-downloader
 ```
 
 2. Install the required dependencies:
@@ -101,6 +101,10 @@ Note: The application must be built before it can be run. Running the Python scr
 If the application crashes or fails to start:
 
 1. **Authentication Issues**
+   - The application stores authentication files in `%LOCALAPPDATA%\SpotifyToTidal`:
+     - `tidal_session.pkl`: Tidal authentication session
+     - `app_settings.json`: Application settings
+     - `.spotify_token_cache`: Spotify authentication token
    - Check if the AppData directory exists:
      ```powershell
      dir %LOCALAPPDATA%\SpotifyToTidal
@@ -113,6 +117,7 @@ If the application crashes or fails to start:
      ```powershell
      del %LOCALAPPDATA%\SpotifyToTidal\*.pkl
      del %LOCALAPPDATA%\SpotifyToTidal\app_settings.json
+     del %LOCALAPPDATA%\SpotifyToTidal\.spotify_token_cache
      ```
    - Make sure you have proper permissions to access the AppData directory
    - Try running the application as administrator
