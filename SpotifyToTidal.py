@@ -2073,7 +2073,7 @@ class DownloadThread(QThread):
             # Verify WSL folder exists
             self.update_log.emit(f"\nVerifying WSL folder: {wsl_folder}")
             check_folder = subprocess.run(
-                f'C:\\Windows\\System32\\wsl.exe bash -c "ls -la {wsl_folder}"',
+                f'C:\\Windows\\System32\\wsl.exe bash -c "ls -la \'{wsl_folder}\'"',
                 shell=True,
                 capture_output=True,
                 text=True
@@ -2087,8 +2087,8 @@ class DownloadThread(QThread):
             # Convert Windows path to WSL path
             wsl_path = self.convert_windows_to_wsl_path(windows_folder)
             
-            # Use wsl.exe to copy files directly
-            copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "cp -r {wsl_folder}/* {wsl_path}/"'
+            # Use wsl.exe to copy files directly, wrap in single quotes
+            copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "cp -r \'{wsl_folder}/*\' \'{wsl_path}/\'"'
             result = subprocess.run(
                 copy_cmd,
                 shell=True,
@@ -2100,7 +2100,7 @@ class DownloadThread(QThread):
                 self.update_log.emit(f"Error copying files: {result.stderr}")
                 # Try alternative method using sudo
                 if self.sudo_password:
-                    copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "echo \'{self.sudo_password}\' | sudo -S cp -r {wsl_folder}/* {wsl_path}/"'
+                    copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "echo \'{self.sudo_password}\' | sudo -S cp -r \'{wsl_folder}/*\' \'{wsl_path}/\'"'
                     result = subprocess.run(
                         copy_cmd,
                         shell=True,
@@ -2112,7 +2112,7 @@ class DownloadThread(QThread):
                         return
 
             # Verify files were copied
-            verify_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "ls -la {wsl_path}"'
+            verify_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "ls -la \'{wsl_path}\'"'
             verify_result = subprocess.run(
                 verify_cmd,
                 shell=True,
@@ -2123,7 +2123,7 @@ class DownloadThread(QThread):
             self.update_log.emit(verify_result.stdout)
 
             # Clean up WSL folder
-            cleanup_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "rm -rf {wsl_folder}/*"'
+            cleanup_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "rm -rf \'{wsl_folder}/*\'"'
             subprocess.run(
                 cleanup_cmd,
                 shell=True,
@@ -2209,13 +2209,16 @@ class DownloadThread(QThread):
             self.update_log.emit(f"Traceback: {traceback.format_exc()}")
 
     def convert_windows_to_wsl_path(self, win_path: str) -> str:
-        """Convert Windows path to WSL path."""
+        """Convert Windows path to WSL path, escaping spaces."""
         win_path = win_path.replace("\\", "/")
         if win_path.startswith("\\\\"):
             return win_path  # UNC path, leave as-is
         if re.match(r"^[a-zA-Z]:", win_path):
             drive, path = win_path[0], win_path[2:]
-            return f"/mnt/{drive.lower()}{path}"
+            # Ensure leading slash and escape spaces
+            wsl_path = f"/mnt/{drive.lower()}{path}"
+            wsl_path = wsl_path.replace(' ', '\\\ ')  # Escape spaces for bash
+            return wsl_path
         return win_path
 
     def set_password_verified(self, verified: bool) -> None:
