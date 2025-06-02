@@ -2090,7 +2090,7 @@ class DownloadThread(QThread):
             self.update_log.emit(f"[DEBUG] Using WSL path: {wsl_path_escaped}")
             
             # Use wsl.exe to copy files directly, wrap in single quotes
-            copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "cp -r \'{wsl_folder}/*\' \'{wsl_path_escaped}/\'"'
+            copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "cp -r \'{wsl_folder}/.\' \'{wsl_path_escaped}/\'"'
             result = subprocess.run(
                 copy_cmd,
                 shell=True,
@@ -2102,7 +2102,7 @@ class DownloadThread(QThread):
                 self.update_log.emit(f"Error copying files: {result.stderr}")
                 # Try alternative method using sudo
                 if self.sudo_password:
-                    copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "echo \'{self.sudo_password}\' | sudo -S cp -r \'{wsl_folder}/*\' \'{wsl_path_escaped}/\'"'
+                    copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "echo \'{self.sudo_password}\' | sudo -S cp -r \'{wsl_folder}/.\' \'{wsl_path_escaped}/\'"'
                     result = subprocess.run(
                         copy_cmd,
                         shell=True,
