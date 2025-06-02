@@ -2084,11 +2084,13 @@ class DownloadThread(QThread):
             # Create Windows folder if it doesn't exist
             os.makedirs(windows_folder, exist_ok=True)
 
-            # Convert Windows path to WSL path
+            # Convert Windows path to WSL path and escape single quotes
             wsl_path = self.convert_windows_to_wsl_path(windows_folder)
+            wsl_path_escaped = self.escape_single_quotes(wsl_path)
+            self.update_log.emit(f"[DEBUG] Using WSL path: {wsl_path_escaped}")
             
             # Use wsl.exe to copy files directly, wrap in single quotes
-            copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "cp -r \'{wsl_folder}/*\' \'{wsl_path}/\'"'
+            copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "cp -r \'{wsl_folder}/*\' \'{wsl_path_escaped}/\'"'
             result = subprocess.run(
                 copy_cmd,
                 shell=True,
@@ -2100,7 +2102,7 @@ class DownloadThread(QThread):
                 self.update_log.emit(f"Error copying files: {result.stderr}")
                 # Try alternative method using sudo
                 if self.sudo_password:
-                    copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "echo \'{self.sudo_password}\' | sudo -S cp -r \'{wsl_folder}/*\' \'{wsl_path}/\'"'
+                    copy_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "echo \'{self.sudo_password}\' | sudo -S cp -r \'{wsl_folder}/*\' \'{wsl_path_escaped}/\'"'
                     result = subprocess.run(
                         copy_cmd,
                         shell=True,
@@ -2112,7 +2114,7 @@ class DownloadThread(QThread):
                         return
 
             # Verify files were copied
-            verify_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "ls -la \'{wsl_path}\'"'
+            verify_cmd = f'C:\\Windows\\System32\\wsl.exe bash -c "ls -la \'{wsl_path_escaped}\'"'
             verify_result = subprocess.run(
                 verify_cmd,
                 shell=True,
@@ -2209,17 +2211,19 @@ class DownloadThread(QThread):
             self.update_log.emit(f"Traceback: {traceback.format_exc()}")
 
     def convert_windows_to_wsl_path(self, win_path: str) -> str:
-        """Convert Windows path to WSL path, escaping spaces."""
+        """Convert Windows path to WSL path (robust, no escaping, just quoting in bash)."""
         win_path = win_path.replace("\\", "/")
         if win_path.startswith("\\\\"):
             return win_path  # UNC path, leave as-is
         if re.match(r"^[a-zA-Z]:", win_path):
             drive, path = win_path[0], win_path[2:]
-            # Ensure leading slash and escape spaces
             wsl_path = f"/mnt/{drive.lower()}{path}"
-            wsl_path = wsl_path.replace(' ', '\\\ ')  # Escape spaces for bash
             return wsl_path
         return win_path
+
+    def escape_single_quotes(self, path: str) -> str:
+        """Escape single quotes for safe use in bash single-quoted strings."""
+        return path.replace("'", "'\"'\"'")
 
     def set_password_verified(self, verified: bool) -> None:
         """Set password verification status."""
